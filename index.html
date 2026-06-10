@@ -5,20 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Tarobun Green Pramuka Hub</title>
   
-  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   
-  <!-- React & ReactDOM (Development version for easy setup) -->
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   
-  <!-- Babel for JSX compilation in browser -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   
-  <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
-  <!-- Tailwind Configuration to match premium look -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+
   <script>
     tailwind.config = {
       theme: {
@@ -36,12 +34,30 @@
 </head>
 <body class="bg-slate-50 text-slate-800 font-sans pb-24">
 
-  <!-- React Root Element -->
   <div id="root"></div>
 
-  <!-- React Code with Babel -->
   <script type="text/babel">
     const { useState, useEffect } = React;
+
+    // ==========================================
+    // KONFIGURASI FIREBASE KELOLAAN ANDA
+    // ==========================================
+    // Ganti object di bawah ini dengan kredibel/config dari console Firebase Anda!
+    const firebaseConfig = {
+      apiKey: "AIzaSyBvi4vRC2WN7y9ctXldjtKCqDBsUIBXA7Q",
+      authDomain: "tarobungps-987c1.firebaseapp.com",
+      databaseURL: "https://tarobungps-987c1-default-rtdb.asia-southeast1.firebasedatabase.app", // WAJIB ADA untuk Realtime Database
+      projectId: "tarobungps-987c1",
+      storageBucket: "tarobungps-987c1.firebasestorage.app",
+      messagingSenderId: "751925672781",
+      appId: "1:751925672781:web:002a47a53af804fc15d504"
+    };
+
+    // Initialize Firebase (Hanya jika belum di-inisialisasi)
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    const db = firebase.database();
 
     function App() {
       // Navigation tab state
@@ -49,14 +65,14 @@
       const [notification, setNotification] = useState(null);
       const [showConfig, setShowConfig] = useState(false);
 
-      // Re-initialize icons on every render to ensure they show up in tabs
+      // Re-initialize icons on every render
       useEffect(() => {
         if (window.lucide) {
           window.lucide.createIcons();
         }
       });
 
-      // Configuration states (Saved in LocalStorage)
+      // Configuration states (Saved in LocalStorage / Firebase fallback)
       const [config, setConfig] = useState({
         telegramBotToken: '',
         telegramChatId: '',
@@ -149,16 +165,34 @@
         setTimeout(() => setNotification(null), 3000);
       };
 
-      // Load config & history on start
+      // --- INTEGRASI REALTIME FIREBASE ---
+      // Menggantikan proses pembacaan localstorage agar sinkron antar user secara live!
       useEffect(() => {
-        const savedHistory = localStorage.getItem('tarobun_history_web');
-        if (savedHistory) {
-          setHistoryList(JSON.parse(savedHistory));
-        }
+        // 1. Tarik Data History secara Real-time dari Node 'history'
+        const historyRef = db.ref('history');
+        historyRef.on('value', (snapshot) => {
+          const data = snapshot.val();
+          if (data) {
+            // Mengubah format Object Firebase { id1: data1, id2: data2 } menjadi Array sorted terbaru di atas
+            const formattedList = Object.keys(data).map(key => ({
+              ...data[key],
+              firebaseKey: key // simpan key firebase untuk mempermudah hapus data
+            })).sort((a, b) => b.tanggal.localeCompare(a.tanggal));
+            
+            setHistoryList(formattedList);
+          } else {
+            setHistoryList([]);
+          }
+        });
+
+        // 2. Load Config Web tetap di localstorage (opsional, agar token bot privat per HP pembuka)
         const savedConfig = localStorage.getItem('tarobun_config_web');
         if (savedConfig) {
           setConfig(JSON.parse(savedConfig));
         }
+
+        // Clean up listener saat component unmount
+        return () => historyRef.off();
       }, []);
 
       const numVal = (val) => {
@@ -195,70 +229,39 @@
       const fillingLemonUsedKg = (numVal(salesData.soldBuns.lemon) * 25) / 1000;
       const fillingRaspberryUsedKg = (numVal(salesData.soldBuns.raspberry) * 25) / 1000;
 
-      // --- KULKULASI BAHAN BAKU BEVERAGES (KONSOLIDASI KE KG) ---
+      // --- KULKULASI BAHAN BAKU BEVERAGES ---
       const taroLatteSales = numVal(salesData.soldBeverages.taroLatte);
       const taroStrawCheeseSales = numVal(salesData.soldBeverages.taroStrawberryCheese);
       const taroBlueberrySales = numVal(salesData.soldBeverages.taroBlueberry);
       
-      // 1. All Varian Taro Latte terjual (Taro Latte + Strawberry Cheese + Blueberry)
       const totalAllTaroVarian = taroLatteSales + taroStrawCheeseSales + taroBlueberrySales;
 
-      // Base Formula per cup (Semua Varian Taro Latte):
-      // - NDC: 25 Gram
-      // - Taro Powder: 40 Gram
-      // - Susu UHT: 100 ML
       const baseNdcGrams = totalAllTaroVarian * 25;
       const baseTaroPowderGrams = totalAllTaroVarian * 40;
       const baseUhtMl = totalAllTaroVarian * 100;
 
-      // 2. Varian Stroberi Cheese (Per Cup terjual):
-      // - Cheese Powder: 0.48 Gram
-      // - Susu UHT: 9.76 ML
-      // - Whipping Cream: 9.76 ML
-      // - Stroberi Saus: 20 Gram
       const addCheesePowderGrams = taroStrawCheeseSales * 0.48;
       const addUhtMlStrawCheese = taroStrawCheeseSales * 9.76;
       const addWhipCreamGramsStrawCheese = taroStrawCheeseSales * 9.76;
       const addStrawSausGramsStrawCheese = taroStrawCheeseSales * 20;
 
-      // 3. Varian Blueberry (Per Cup terjual):
-      // - Stroberi Sirup: 6 Gram
-      // - Susu UHT: 12 Gram (dianggap setara 12 ml)
-      // - Whipping Cream: 12 Gram
-      // - Blueberry Saus: 20 Gram
       const addStrawSyrupGramsBlueberry = taroBlueberrySales * 6;
       const addUhtMlBlueberry = taroBlueberrySales * 12;
       const addWhipCreamGramsBlueberry = taroBlueberrySales * 12;
       const addBlueberrySausGrams = taroBlueberrySales * 20;
-
-      // --- GABUNGKAN BARANG DASAR YANG SAMA DAN JADIKAN KILOGRAM (KG) ---
       
-      // Susu UHT Total (Base 100ml + Str Cheese 9.76ml + Blueberry 12ml)
       const totalUhtVolume = baseUhtMl + addUhtMlStrawCheese + addUhtMlBlueberry;
       const bevUhtKg = totalUhtVolume / 1000;
 
-      // Whipping Cream Total (Str Cheese 9.76g + Blueberry 12g)
       const totalWhippingCreamGrams = addWhipCreamGramsStrawCheese + addWhipCreamGramsBlueberry;
       const bevWhipCreamKg = totalWhippingCreamGrams / 1000;
 
-      // NDC Powder Total
       const bevNdcKg = baseNdcGrams / 1000;
-
-      // Taro Powder Total
       const bevTaroPowderKg = baseTaroPowderGrams / 1000;
-
-      // Cheese Powder Total
       const bevCheesePowderKg = addCheesePowderGrams / 1000;
-
-      // Stroberi Sirup Total
       const bevStrawSyrupKg = addStrawSyrupGramsBlueberry / 1000;
-
-      // Blueberry Saus Total (Baru)
       const bevBlueberrySausKg = addBlueberrySausGrams / 1000;
-
-      // Stroberi Saus Total (Baru)
       const bevStrawSausKg = addStrawSausGramsStrawCheese / 1000;
-
 
       const formatIndonesianDate = (dateStr) => {
         if (!dateStr) return '';
@@ -280,9 +283,10 @@
         setShowConfig(false);
       };
 
-      // Simulated Database - Save locally
-      const handleSaveToDevice = () => {
-        const newEntry = {
+      // --- MENGUBAH PENYIMPANAN KE CLOUD FIREBASE ---
+      const handleSaveToDevice = async () => {
+        const idEntry = salesData.tanggal; // Gunakan tanggal sebagai identifier unik atau timestamp
+        const payload = {
           id: Date.now().toString(),
           tanggal: salesData.tanggal,
           totalSales: totalBunsSold,
@@ -291,20 +295,24 @@
           inventory: { ...inventoryData }
         };
 
-        const updatedHistory = [newEntry, ...historyList.filter(h => h.tanggal !== salesData.tanggal)];
-        setHistoryList(updatedHistory);
-        localStorage.setItem('tarobun_history_web', JSON.stringify(updatedHistory));
-        showToast('Laporan berhasil disimpan di HP! 📱');
-
-        // Sync with Google Apps Script if URL provided
-        if (config.googleAppScriptUrl) {
-          syncToGoogleSheets(newEntry);
+        try {
+          showToast('Menyimpan ke Cloud Firebase... ☁️');
+          // Menggunakan sistem update berbasis tanggal agar data di tanggal yang sama ter-overwrite/diperbarui otomatis
+          await db.ref('history/' + idEntry).set(payload);
+          showToast('Laporan berhasil disimpan di Cloud & HP! 📱✨');
+          
+          // Sync dengan Google Apps Script jika URL disediakan
+          if (config.googleAppScriptUrl) {
+            syncToGoogleSheets(payload);
+          }
+        } catch (error) {
+          console.error(error);
+          showToast('Gagal menyimpan ke Firebase. Cek koneksi Internet / Aturan Rules.');
         }
       };
 
       const syncToGoogleSheets = async (dataPayload) => {
         try {
-          showToast('Menghubungkan ke Google Sheets... ☁️');
           await fetch(config.googleAppScriptUrl, {
             method: 'POST',
             mode: 'no-cors',
@@ -314,11 +322,10 @@
           showToast('Sinkronisasi Google Sheets Berhasil! 🟢');
         } catch (error) {
           console.error(error);
-          showToast('Gagal terhubung ke Google Sheets. Cek kembali URL Anda.');
+          showToast('Gagal terhubung ke Google Sheets.');
         }
       };
 
-      // Load 29 May 2026 Sample Data
       const handleLoadSampleData = () => {
         setSalesData({
           tanggal: '2026-05-29',
@@ -533,11 +540,15 @@ Terima Kasih 🙏🏻`;
         }
       };
 
-      const handleDeleteHistory = (id) => {
-        const updated = historyList.filter(item => item.id !== id);
-        setHistoryList(updated);
-        localStorage.setItem('tarobun_history_web', JSON.stringify(updated));
-        showToast('Riwayat berhasil dihapus.');
+      // --- PROSES DELETION PADA FIREBASE ---
+      const handleDeleteHistory = async (id) => {
+        try {
+          showToast('Menghapus dari Cloud... 🗑️');
+          await db.ref('history/' + id).remove();
+          showToast('Riwayat berhasil dihapus dari Cloud.');
+        } catch (error) {
+          showToast('Gagal menghapus data.');
+        }
       };
 
       const handleExportCSV = () => {
@@ -587,7 +598,7 @@ Terima Kasih 🙏🏻`;
                 </div>
                 <div>
                   <h1 className="font-bold text-sm md:text-base tracking-wide">TAROBUN</h1>
-                  <p className="text-[10px] text-purple-200">Green Pramuka Hub & System</p>
+                  <p className="text-[10px] text-purple-200">Green Pramuka Hub & System (Cloud Powered)</p>
                 </div>
               </div>
               
@@ -697,7 +708,7 @@ Terima Kasih 🙏🏻`;
 
             {/* Notifications */}
             {notification && (
-              <div className="bg-indigo-900 text-white rounded-lg px-4 py-3 shadow-lg fixed bottom-24 right-4 left-4 md:right-8 md:left-auto md:max-w-md z-50 flex items-center space-x-2 animate-bounce">
+              <div className="bg-indigo-900 text-white rounded-lg px-4 py-3 shadow-lg fixed bottom-24 right-4 left-4 md:right-8 md:left-auto md:max-w-md z-50 flex items-center space-x-2">
                 <i data-lucide="check-circle" className="w-5 h-5 text-green-400"></i>
                 <span className="text-xs font-semibold">{notification}</span>
               </div>
@@ -724,13 +735,13 @@ Terima Kasih 🙏🏻`;
                     <span className="text-md font-extrabold text-emerald-600 block truncate">Rp {numVal(salesData.financials.value).toLocaleString('id-ID')}</span>
                     <span className="text-[10px] text-slate-400 mt-1 block">Tx: {salesData.financials.transaksi || 0}</span>
                   </div>
-<div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
-  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Gagal Baking / Roti Matang</span>
-  <span className="text-xl font-extrabold text-amber-600 block">
-    {numVal(salesData.waste.doughGagalBaking)} / {numVal(salesData.waste.rotiMatang)} <span className="text-xs font-normal">pcs</span>
-  </span>
-  <span className="text-[10px] text-slate-400 mt-1 block">Bake: {salesData.waste.doughGagalBaking || 0} | Matang: {salesData.waste.rotiMatang || 0}</span>
-</div>
+                  <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Gagal Baking / Roti Matang</span>
+                    <span className="text-xl font-extrabold text-amber-600 block">
+                      {numVal(salesData.waste.doughGagalBaking)} / {numVal(salesData.waste.rotiMatang)} <span className="text-xs font-normal">pcs</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400 mt-1 block">Bake: {salesData.waste.doughGagalBaking || 0} | Matang: {salesData.waste.rotiMatang || 0}</span>
+                  </div>
                 </div>
 
                 {/* Formula Usage Card - BAKERY */}
@@ -877,12 +888,12 @@ Terima Kasih 🙏🏻`;
                 {/* Send Buttons Card */}
                 <div className="bg-gradient-to-br from-indigo-800 to-indigo-950 text-white rounded-2xl p-5 shadow-md">
                   <h3 className="font-bold text-base mb-1">Simpan & Kirim Laporan Harian</h3>
-                  <p className="text-xs text-indigo-200 mb-4">Simpan data di memori internal HP dan bagikan langsung ke Group WhatsApp atau Telegram.</p>
+                  <p className="text-xs text-indigo-200 mb-4">Simpan data di memori Cloud Firebase dan bagikan langsung ke Group WhatsApp atau Telegram.</p>
                   
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <button onClick={handleSaveToDevice} className="bg-white text-indigo-950 font-bold text-xs py-2.5 rounded-xl flex items-center justify-center space-x-2 shadow-sm hover:bg-slate-100 transition-colors">
-                      <i data-lucide="database" className="w-4 h-4 text-indigo-800"></i>
-                      <span>Simpan di HP</span>
+                      <i data-lucide="cloud" className="w-4 h-4 text-indigo-800"></i>
+                      <span>Simpan di Cloud</span>
                     </button>
                     <button onClick={handleSendToTelegram} className="bg-sky-500 text-white font-bold text-xs py-2.5 rounded-xl flex items-center justify-center space-x-2 shadow-sm hover:bg-sky-400 transition-colors">
                       <i data-lucide="send" className="w-4 h-4"></i>
@@ -1035,7 +1046,7 @@ Terima Kasih 🙏🏻`;
 
                 {/* Saves */}
                 <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-slate-100">
-                  <button onClick={handleSaveToDevice} className="flex-1 bg-purple-800 text-white font-bold py-3 rounded-xl hover:bg-purple-900 transition-colors">Simpan di HP</button>
+                  <button onClick={handleSaveToDevice} className="flex-1 bg-purple-800 text-white font-bold py-3 rounded-xl hover:bg-purple-900 transition-colors">Simpan di Cloud</button>
                   <button onClick={handleSendToTelegram} className="flex-1 bg-sky-600 text-white font-bold py-3 rounded-xl hover:bg-sky-700 transition-colors">Kirim Telegram</button>
                   <button onClick={handleSendToWA} className="flex-1 bg-emerald-600 text-white font-bold py-3 rounded-xl hover:bg-emerald-700 transition-colors">Kirim WA</button>
                 </div>
@@ -1126,9 +1137,9 @@ Terima Kasih 🙏🏻`;
                       <input type="number" value={inventoryData.strawberryKonsentrat} onChange={(e) => setInventoryData({ ...inventoryData, strawberryKonsentrat: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-  <label className="block text-xs font-semibold text-slate-600 mb-1">Strawberry Syrup (btl)</label>
-  <input type="number" value={inventoryData.strawberrySyrup} onChange={(e) => setInventoryData({ ...inventoryData, strawberrySyrup: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
-</div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Strawberry Syrup (btl)</label>
+                      <input type="number" value={inventoryData.strawberrySyrup} onChange={(e) => setInventoryData({ ...inventoryData, strawberrySyrup: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                    </div>
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">Blueberry Kons (pk)</label>
                       <input type="number" value={inventoryData.blueberryKonsentrat} onChange={(e) => setInventoryData({ ...inventoryData, blueberryKonsentrat: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
@@ -1214,7 +1225,7 @@ Terima Kasih 🙏🏻`;
                 {/* Save Inventory */}
                 <div className="pt-4 border-t border-slate-100">
                   <button onClick={handleSaveToDevice} className="w-full bg-indigo-700 hover:bg-indigo-800 text-white font-bold py-3 rounded-xl transition-all shadow-sm">
-                    Simpan Data & Hitung
+                    Simpan Data Cloud & Hitung
                   </button>
                 </div>
               </div>
@@ -1225,8 +1236,8 @@ Terima Kasih 🙏🏻`;
               <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-6">
                 <div className="flex justify-between items-center pb-4 border-b border-slate-100">
                   <div>
-                    <h3 className="font-bold text-slate-800 text-lg">Riwayat Data</h3>
-                    <p className="text-xs text-slate-500">Kelola riwayat input yang tersimpan di memori HP Anda.</p>
+                    <h3 className="font-bold text-slate-800 text-lg">Riwayat Data Cloud (Firebase)</h3>
+                    <p className="text-xs text-slate-500">Kelola riwayat input yang tersinkronisasi di semua HP karyawan.</p>
                   </div>
                   <button onClick={handleExportCSV} className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-all">
                     <i data-lucide="download" className="w-3.5 h-3.5"></i>
@@ -1237,12 +1248,12 @@ Terima Kasih 🙏🏻`;
                 {historyList.length === 0 ? (
                   <div className="text-center py-12 text-slate-400">
                     <i data-lucide="history" className="w-12 h-12 mx-auto mb-2 text-slate-300"></i>
-                    <p className="text-sm font-medium">Belum ada riwayat tersimpan.</p>
+                    <p className="text-sm font-medium">Belum ada riwayat tersimpan di Cloud Firebase.</p>
                   </div>
                 ) : (
                   <div className="divide-y divide-slate-100">
                     {historyList.map(item => (
-                      <div key={item.id} className="py-4 flex justify-between items-center">
+                      <div key={item.tanggal} className="py-4 flex justify-between items-center">
                         <div>
                           <h4 className="font-bold text-slate-700 text-sm">{formatIndonesianDate(item.tanggal)}</h4>
                           <p className="text-xs text-slate-400">
@@ -1251,7 +1262,7 @@ Terima Kasih 🙏🏻`;
                         </div>
                         <div className="flex items-center space-x-2">
                           <button onClick={() => loadHistoryToActive(item)} className="bg-purple-50 text-purple-700 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-purple-100">Buka</button>
-                          <button onClick={() => handleDeleteHistory(item.id)} className="text-rose-600 hover:bg-rose-50 p-1.5 rounded-lg border border-rose-100"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
+                          <button onClick={() => handleDeleteHistory(item.tanggal)} className="text-rose-600 hover:bg-rose-50 p-1.5 rounded-lg border border-rose-100"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
                         </div>
                       </div>
                     ))}
