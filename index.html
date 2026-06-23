@@ -37,7 +37,7 @@
     }
   </script>
 </head>
-<body class="bg-slate-50 text-slate-800 font-sans pb-24">
+<body class="bg-slate-50 text-slate-800 font-sans">
 
   <div id="root"></div>
 
@@ -172,6 +172,56 @@ useEffect(() => {
       const [historyList, setHistoryList] = useState([]);
 
       // ==========================================
+      // DATANG BARANG - STATE & MASTER DATA
+      // ==========================================
+      // Daftar barang "Kop Khusus" -> Frozen Dough s/d Filling (butuh no. faktur/surat jalan)
+      const KEDATANGAN_KOP_KHUSUS_ITEMS = [
+        { key: 'frozenDough', label: 'Frozen Dough', unit: 'pcs' },
+        { key: 'toppingTaro', label: 'Topping Taro', unit: 'kg' },
+        { key: 'taroPowder', label: 'Taro Powder', unit: 'kg' },
+        { key: 'fillingCoklat', label: 'Filling Coklat', unit: 'kg' },
+        { key: 'fillingVanilla', label: 'Filling Vanilla', unit: 'kg' },
+        { key: 'fillingRaspberry', label: 'Filling Raspberry', unit: 'kg' },
+        { key: 'fillingLemon', label: 'Filling Lemon', unit: 'kg' },
+        { key: 'fillingPeach', label: 'Filling Peach', unit: 'kg' },
+        { key: 'fillingNanas', label: 'Filling Nanas', unit: 'kg' },
+      ];
+
+      // Daftar barang umum (non kop khusus)
+      const KEDATANGAN_BARANG_UMUM_ITEMS = [
+        { key: 'whippingCream', label: 'Whipping Cream', unit: 'pcs' },
+        { key: 'ndcPowder', label: 'NDC Powder', unit: 'pack' },
+        { key: 'familyPack', label: 'Family Pack', unit: 'pack' },
+        { key: 'cupLid22', label: 'Cup Lid 22 oz', unit: 'pack' },
+        { key: 'cupbler22', label: 'Cupbler 22 oz', unit: 'pack' },
+        { key: 'thermalPaper', label: 'Thermal Paper', unit: 'pack' },
+        { key: 'plastikUK35', label: 'Plastik UK 35', unit: 'pack' },
+        { key: 'strawberrySyrup', label: 'Strawberry Syrup', unit: 'kg' },
+        { key: 'konsentratStrawberry', label: 'Konsentrat Strawberry', unit: 'kg' },
+        { key: 'konsentratBlueberry', label: 'Konsentrat Blueberry', unit: 'kg' },
+        { key: 'cheeseFoamPowder', label: 'Cheese Foam Powder', unit: 'pack' },
+        { key: 'kuraflexMerah', label: 'Kuraflex Merah', unit: 'pack' },
+        { key: 'kuraflexHijau', label: 'Kuraflex Hijau', unit: 'pack' },
+        { key: 'tissueSmall', label: 'Tissue Small', unit: 'pack' },
+        { key: 'tissueLarge', label: 'Tissue Large', unit: 'pack' },
+      ];
+
+      const getEmptyKedatanganForm = (dateStr = new Date().toISOString().split('T')[0]) => ({
+        tanggal: dateStr,
+        noSuratJalan: '', // Kop Khusus / No. Faktur Surat Jalan
+        items: {}, // { itemKey: jumlah }
+        tidakSesuai: [], // [{ id, nama, jumlah, satuan, keterangan }]
+      });
+
+      const [kedatanganForm, setKedatanganForm] = useState(() => getEmptyKedatanganForm());
+      const [kedatanganHistoryList, setKedatanganHistoryList] = useState([]);
+      const [isSavingKedatangan, setIsSavingKedatangan] = useState(false);
+      const [tidakSesuaiInput, setTidakSesuaiInput] = useState({ nama: '', jumlah: '', satuan: 'pcs', keterangan: '' });
+
+      // Menu sidebar (hamburger)
+      const [showMenu, setShowMenu] = useState(false);
+
+      // ==========================================
       // FOTO WASTE / RIJEK - STATE
       // ==========================================
       const WASTE_CATEGORIES = {
@@ -218,6 +268,8 @@ useEffect(() => {
       const [isCompressingFoto, setIsCompressingFoto] = useState(false);
       const [isSavingFoto, setIsSavingFoto] = useState(false);
       const [sendingCategory, setSendingCategory] = useState(null);
+      // Tanggal riwayat yang sedang ditampilkan di tab Foto Rijek (default: hari ini)
+      const [wasteFotoViewDate, setWasteFotoViewDate] = useState(() => new Date().toISOString().split('T')[0]);
 
       // Toast notification helper
       const showToast = (message) => {
@@ -266,10 +318,26 @@ useEffect(() => {
           }
         });
 
+        // 4. Tarik Data Kedatangan Barang secara Real-time dari Node 'kedatanganBarang'
+        const kedatanganRef = db.ref('kedatanganBarang');
+        kedatanganRef.on('value', (snapshot) => {
+          const data = snapshot.val();
+          if (data) {
+            const formattedList = Object.keys(data).map(key => ({
+              ...data[key],
+              firebaseKey: key
+            })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            setKedatanganHistoryList(formattedList);
+          } else {
+            setKedatanganHistoryList([]);
+          }
+        });
+
         // Clean up listener saat component unmount
         return () => {
           historyRef.off();
           wasteFotoRef.off();
+          kedatanganRef.off();
         };
       }, []);
 
@@ -647,6 +715,192 @@ Terima Kasih 🙏🏻`;
       };
 
       // ==========================================
+      // DATANG BARANG - LOGIKA
+      // ==========================================
+      const handleKedatanganItemChange = (key, value) => {
+        setKedatanganForm(prev => ({
+          ...prev,
+          items: { ...prev.items, [key]: value }
+        }));
+      };
+
+      // Khusus item Kop Khusus (Frozen Dough, Topping Taro, Filling): nilai berupa { jumlah, tanggalProduksi }
+      const handleKedatanganKhususChange = (key, field, value) => {
+        setKedatanganForm(prev => {
+          const current = prev.items[key] && typeof prev.items[key] === 'object' ? prev.items[key] : { jumlah: '', tanggalProduksi: '' };
+          return {
+            ...prev,
+            items: {
+              ...prev.items,
+              [key]: { ...current, [field]: value }
+            }
+          };
+        });
+      };
+
+      // Helper ambil jumlah & tanggal produksi item khusus dengan aman (jaga kompatibilitas data lama yang masih string)
+      const getKhususItemValue = (items, key) => {
+        const val = items[key];
+        if (val && typeof val === 'object') return val;
+        return { jumlah: val || '', tanggalProduksi: '' };
+      };
+
+      const handleAddTidakSesuai = () => {
+        if (!tidakSesuaiInput.nama || !tidakSesuaiInput.jumlah) {
+          showToast('⚠️ Isi nama barang & jumlah pada Barang Tidak Sesuai Surat.');
+          return;
+        }
+        setKedatanganForm(prev => ({
+          ...prev,
+          tidakSesuai: [
+            ...prev.tidakSesuai,
+            {
+              id: Date.now().toString(),
+              nama: tidakSesuaiInput.nama,
+              jumlah: tidakSesuaiInput.jumlah,
+              satuan: tidakSesuaiInput.satuan,
+              keterangan: tidakSesuaiInput.keterangan
+            }
+          ]
+        }));
+        setTidakSesuaiInput({ nama: '', jumlah: '', satuan: 'pcs', keterangan: '' });
+        showToast('Barang tidak sesuai ditambahkan ke daftar. ✅');
+      };
+
+      const handleRemoveTidakSesuai = (id) => {
+        setKedatanganForm(prev => ({
+          ...prev,
+          tidakSesuai: prev.tidakSesuai.filter(it => it.id !== id)
+        }));
+      };
+
+      const handleResetKedatanganForm = () => {
+        setKedatanganForm(getEmptyKedatanganForm());
+        setTidakSesuaiInput({ nama: '', jumlah: '', satuan: 'pcs', keterangan: '' });
+      };
+
+      const generateKedatanganReportString = (form) => {
+        const formattedDate = formatIndonesianDate(form.tanggal);
+        let text = `*Selamat Pagi Pak/Bu. Menginformasikan Green Pramuka Kedatangan Batang*\nTanggal: ${formattedDate}\n`;
+        if (form.noSuratJalan) {
+          text += `No. Faktur/Surat Jalan: ${form.noSuratJalan}\n`;
+        }
+        text += `\n*Frozen Dough & Filling (Kop Khusus)* :\n`;
+        let anyKhusus = false;
+        KEDATANGAN_KOP_KHUSUS_ITEMS.forEach(item => {
+          const val = getKhususItemValue(form.items, item.key);
+          if (val.jumlah && numVal(val.jumlah) > 0) {
+            anyKhusus = true;
+            const tgl = val.tanggalProduksi ? ` (Produksi: ${val.tanggalProduksi})` : '';
+            text += `${item.label} : ${val.jumlah} ${item.unit}${tgl}\n`;
+          }
+        });
+        if (!anyKhusus) text += `(Tidak ada input)\n`;
+
+        text += `\n*Barang Umum* :\n`;
+        let anyUmum = false;
+        KEDATANGAN_BARANG_UMUM_ITEMS.forEach(item => {
+          const val = form.items[item.key];
+          if (val && numVal(val) > 0) {
+            anyUmum = true;
+            text += `${item.label} : ${val} ${item.unit}\n`;
+          }
+        });
+        if (!anyUmum) text += `(Tidak ada input)\n`;
+
+        if (form.tidakSesuai && form.tidakSesuai.length > 0) {
+          text += `\n*Barang Tidak Sesuai Faktur/Surat Jalan* :\n`;
+          form.tidakSesuai.forEach(it => {
+            text += `${it.nama} : ${it.jumlah} ${it.satuan}${it.keterangan ? ' - ' + it.keterangan : ''}\n`;
+          });
+        }
+
+        text += `\nAccurate done✅
+Ordering tracker done✅
+Daily inventory done✅
+        Terima kasih 🙏🏻`;
+        return text;
+      };
+
+      const handleSaveKedatangan = async () => {
+        const hasKhusus = KEDATANGAN_KOP_KHUSUS_ITEMS.some(item => numVal(getKhususItemValue(kedatanganForm.items, item.key).jumlah) > 0);
+        const hasUmum = KEDATANGAN_BARANG_UMUM_ITEMS.some(item => numVal(kedatanganForm.items[item.key]) > 0);
+        const hasTidakSesuai = kedatanganForm.tidakSesuai && kedatanganForm.tidakSesuai.length > 0;
+
+        if (!hasKhusus && !hasUmum && !hasTidakSesuai) {
+          showToast('⚠️ Isi minimal satu jumlah barang sebelum menyimpan.');
+          return;
+        }
+
+        setIsSavingKedatangan(true);
+        try {
+          const now = Date.now();
+          const payload = {
+            id: now.toString(),
+            tanggal: kedatanganForm.tanggal,
+            noSuratJalan: kedatanganForm.noSuratJalan || '',
+            items: { ...kedatanganForm.items },
+            tidakSesuai: [...kedatanganForm.tidakSesuai],
+            createdAt: now
+          };
+          await db.ref('kedatanganBarang/' + now).set(payload);
+          showToast('Data kedatangan barang tersimpan ke Riwayat! 📦✨');
+          handleResetKedatanganForm();
+        } catch (error) {
+          console.error(error);
+          showToast('Gagal menyimpan data. Cek koneksi internet.');
+        } finally {
+          setIsSavingKedatangan(false);
+        }
+      };
+
+      const handleDeleteKedatangan = async (firebaseKey) => {
+        try {
+          showToast('Menghapus data... 🗑️');
+          await db.ref('kedatanganBarang/' + firebaseKey).remove();
+          showToast('Data kedatangan barang berhasil dihapus.');
+        } catch (error) {
+          showToast('Gagal menghapus data.');
+        }
+      };
+
+      const handleSendKedatanganToTelegram = async (form) => {
+        if (!config.telegramBotToken || !config.telegramChatId) {
+          showToast('⚠️ Isi Bot Token & Chat ID Telegram di menu pengaturan (Roda Gigi) dahulu!');
+          setShowConfig(true);
+          return;
+        }
+        const text = generateKedatanganReportString(form);
+        try {
+          showToast('Mengirim ke Telegram... ✈️');
+          const response = await fetch(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: config.telegramChatId, text, parse_mode: 'Markdown' })
+          });
+          const result = await response.json();
+          if (result.ok) {
+            showToast('Laporan kedatangan barang terkirim ke Telegram! 🚀');
+          } else {
+            showToast(`Gagal: ${result.description}`);
+          }
+        } catch (error) {
+          showToast('Koneksi bermasalah saat mengirim ke Telegram.');
+        }
+      };
+
+      const loadKedatanganToActive = (item) => {
+        setKedatanganForm({
+          tanggal: item.tanggal,
+          noSuratJalan: item.noSuratJalan || '',
+          items: { ...item.items },
+          tidakSesuai: item.tidakSesuai ? [...item.tidakSesuai] : []
+        });
+        setActiveTab('kedatangan');
+        showToast(`Memuat data kedatangan tanggal: ${item.tanggal} 🔄`);
+      };
+
+      // ==========================================
       // FOTO WASTE / RIJEK - LOGIKA
       // ==========================================
 
@@ -754,6 +1008,7 @@ Terima Kasih 🙏🏻`;
           };
           await db.ref('wasteFotos/' + now).set(payload);
           showToast('Foto tersimpan ke Riwayat! Silakan input foto baru lagi 📷✨');
+          setWasteFotoViewDate(payload.tanggal);
           handleResetWasteFotoForm(true);
         } catch (error) {
           console.error(error);
@@ -788,7 +1043,67 @@ Terima Kasih 🙏🏻`;
         return groups;
       };
 
-      const wasteFotoGroups = groupWasteFotosByCategory(wasteFotoList);
+      // Daftar tanggal unik yang punya riwayat foto, terbaru di atas (untuk dropdown pilih hari)
+      const wasteFotoAvailableDates = Array.from(new Set(wasteFotoList.map(it => it.tanggal))).sort((a, b) => b.localeCompare(a));
+
+      // Foto yang sesuai dengan tanggal riwayat yang sedang dilihat
+      const wasteFotoListForViewDate = wasteFotoList.filter(it => it.tanggal === wasteFotoViewDate);
+      const wasteFotoGroups = groupWasteFotosByCategory(wasteFotoListForViewDate);
+
+      const handleWasteFotoViewYesterday = () => {
+        const d = new Date(wasteFotoViewDate + 'T00:00:00');
+        d.setDate(d.getDate() - 1);
+        setWasteFotoViewDate(d.toISOString().split('T')[0]);
+      };
+
+      const handleWasteFotoViewToday = () => {
+        setWasteFotoViewDate(new Date().toISOString().split('T')[0]);
+      };
+
+      // Gabungkan beberapa foto (base64) menjadi satu gambar kolase grid agar rapi saat dikirim ke Telegram
+      const buildPhotoCollage = (base64List, maxPerRow = 3, gap = 8) => {
+        return new Promise((resolve, reject) => {
+          if (!base64List || base64List.length === 0) { reject(new Error('Tidak ada foto')); return; }
+          // Sesuaikan ukuran sel agar kolase tidak membengkak saat foto banyak
+          const cellSize = base64List.length > 12 ? 220 : (base64List.length > 6 ? 260 : 320);
+          const imgs = [];
+          let loaded = 0;
+          base64List.forEach((src, idx) => {
+            const img = new Image();
+            img.onload = () => {
+              imgs[idx] = img;
+              loaded++;
+              if (loaded === base64List.length) {
+                const cols = Math.min(maxPerRow, base64List.length);
+                const rows = Math.ceil(base64List.length / cols);
+                const canvas = document.createElement('canvas');
+                canvas.width = cols * cellSize + (cols + 1) * gap;
+                canvas.height = rows * cellSize + (rows + 1) * gap;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                imgs.forEach((im, i) => {
+                  const col = i % cols;
+                  const row = Math.floor(i / cols);
+                  const x = gap + col * (cellSize + gap);
+                  const y = gap + row * (cellSize + gap);
+                  // crop tengah (cover) supaya proporsional dalam sel persegi
+                  const srcSize = Math.min(im.width, im.height);
+                  const sx = (im.width - srcSize) / 2;
+                  const sy = (im.height - srcSize) / 2;
+                  ctx.drawImage(im, sx, sy, srcSize, srcSize, x, y, cellSize, cellSize);
+                  ctx.strokeStyle = '#E2E8F0';
+                  ctx.lineWidth = 2;
+                  ctx.strokeRect(x, y, cellSize, cellSize);
+                });
+                resolve(canvas.toDataURL('image/jpeg', 0.75));
+              }
+            };
+            img.onerror = () => reject(new Error('Gagal memuat salah satu foto'));
+            img.src = src;
+          });
+        });
+      };
 
       // Kirim 1 foto + caption ke Telegram (sendPhoto, base64 dikirim sebagai Blob)
       const sendPhotoToTelegram = async (base64DataUrl, caption) => {
@@ -833,7 +1148,7 @@ Terima Kasih 🙏🏻`;
         }
       };
 
-      // Kirim rekap total + seluruh foto dalam satu kategori ke Telegram Grup
+      // Kirim rekap total + seluruh foto dalam satu kategori ke Telegram Grup (foto digabung jadi 1 kolase agar rapi)
       const handleSendCategoryRecapToTelegram = async (categoryKey) => {
         if (!config.telegramBotToken || !config.telegramChatId) {
           showToast('⚠️ Isi Bot Token & Chat ID Telegram di menu pengaturan (Roda Gigi) dahulu!');
@@ -849,37 +1164,35 @@ Terima Kasih 🙏🏻`;
 
         setSendingCategory(categoryKey);
         try {
-          showToast(`Mengirim rekap ${catInfo.short} ke Telegram... ✈️`);
+          showToast(`Menggabungkan & mengirim foto ${catInfo.short}... ✈️`);
 
-          // 1. Kirim teks rekap total terlebih dahulu
-          const todayStr = formatIndonesianDate(new Date().toISOString().split('T')[0]);
-          let recapText = `*REKAP ${catInfo.label.toUpperCase()}*\n${todayStr}\n\n`;
-          group.items.slice().reverse().forEach((it, idx) => {
-            recapText += `${idx + 1}. ${it.jumlah} pcs - ${it.keterangan || '-'} (${formatIndonesianDate(it.tanggal)})\n`;
+          const orderedItems = group.items.slice().reverse();
+          const tanggalLabel = formatIndonesianDate(wasteFotoViewDate);
+
+          // 1. Buat 1 gambar kolase dari semua foto kategori ini (rapi, tidak terpisah-pisah)
+          const collageDataUrl = await buildPhotoCollage(orderedItems.map(it => it.foto));
+
+          // 2. Susun caption gabungan: total + keterangan tiap foto di bawahnya
+          let caption = `*REKAP ${catInfo.label.toUpperCase()}*\n${tanggalLabel}\n\n`;
+          orderedItems.forEach((it, idx) => {
+            caption += `${idx + 1}. ${it.jumlah} pcs - ${it.keterangan || '-'}\n`;
           });
-          recapText += `\n*TOTAL ${catInfo.short.toUpperCase()} : ${group.total} pcs*`;
+          caption += `\n*TOTAL ${catInfo.short.toUpperCase()} : ${group.total} pcs*`;
 
-          await fetch(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: config.telegramChatId,
-              text: recapText,
-              parse_mode: 'Markdown'
-            })
-          });
-
-          // 2. Kirim setiap foto beserta caption singkat (berurutan agar tidak membanjiri rate-limit)
-          for (const item of group.items.slice().reverse()) {
-            const caption = `${catInfo.short} : ${item.jumlah} pcs\n${item.keterangan || '-'}`;
-            try {
-              await sendPhotoToTelegram(item.foto, caption);
-            } catch (err) {
-              console.error('Gagal kirim salah satu foto:', err);
-            }
+          // Telegram caption foto dibatasi ~1024 karakter; jika kepanjangan, kirim teks rekap penuh terpisah
+          if (caption.length > 1000) {
+            await fetch(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: config.telegramChatId, text: caption, parse_mode: 'Markdown' })
+            });
+            const shortCaption = `*${catInfo.label.toUpperCase()}*\n${tanggalLabel}\n*TOTAL : ${group.total} pcs* (${orderedItems.length} foto)`;
+            await sendPhotoToTelegram(collageDataUrl, shortCaption);
+          } else {
+            await sendPhotoToTelegram(collageDataUrl, caption);
           }
 
-          showToast(`Rekap & seluruh foto ${catInfo.short} berhasil dikirim! 🚀`);
+          showToast(`Kolase & rekap ${catInfo.short} berhasil dikirim! 🚀`);
         } catch (error) {
           console.error(error);
           showToast('Gagal mengirim rekap ke Telegram. Cek koneksi internet.');
@@ -904,7 +1217,7 @@ Terima Kasih 🙏🏻`;
         setSendingCategory('ALL');
         try {
           showToast('Mengirim rekap total semua kategori... ✈️');
-          const todayStr = formatIndonesianDate(new Date().toISOString().split('T')[0]);
+          const todayStr = formatIndonesianDate(wasteFotoViewDate);
           let text = `*REKAP TOTAL FOTO WASTE / RIJEK*\n${todayStr}\n\n`;
           Object.keys(WASTE_CATEGORIES).forEach(key => {
             const catInfo = WASTE_CATEGORIES[key];
@@ -972,12 +1285,18 @@ Terima Kasih 🙏🏻`;
       };
 
       return (
-        <div className="min-h-screen bg-slate-50 text-slate-800 pb-20">
-          
+        <div className="min-h-screen bg-slate-50 text-slate-800">
           {/* Header */}
           <header className="bg-gradient-to-r from-purple-800 to-indigo-900 text-white shadow-md sticky top-0 z-20 px-4 py-3">
             <div className="max-w-4xl mx-auto flex justify-between items-center">
               <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => setShowMenu(true)}
+                  className="p-2 -ml-1 bg-purple-700/60 hover:bg-purple-600 rounded-lg text-white border border-purple-500/30 transition-all"
+                  title="Menu"
+                >
+                  <i data-lucide="menu" className="w-5 h-5"></i>
+                </button>
                 <div className="bg-white text-purple-800 w-8 h-8 rounded-full font-bold flex items-center justify-center text-md tracking-wider">
                   TB
                 </div>
@@ -986,25 +1305,74 @@ Terima Kasih 🙏🏻`;
                   <p className="text-[10px] text-purple-200">Green Pramuka Hub & System (Cloud Powered)</p>
                 </div>
               </div>
-              
-              <div className="flex items-center space-x-2">
-                <button 
-                  onClick={() => setShowConfig(!showConfig)}
-                  className="p-1.5 bg-purple-700/60 hover:bg-purple-600 rounded-lg text-white border border-purple-500/30 transition-all"
-                  title="Integrasi API"
-                >
-                  <i data-lucide="settings" className="w-4 h-4"></i>
-                </button>
-                <button 
-                  onClick={handleLoadSampleData}
-                  className="flex items-center space-x-1 bg-purple-700/60 hover:bg-purple-600 px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-purple-500/30 text-yellow-300 transition-all"
-                >
-                  <i data-lucide="sparkles" className="w-3.5 h-3.5"></i>
-                  <span className="hidden sm:inline text-white">Muat Data Contoh</span>
-                </button>
-              </div>
             </div>
           </header>
+
+          {/* Sidebar Hamburger Menu */}
+          {showMenu && (
+            <div className="fixed inset-0 z-40 flex">
+              {/* Overlay */}
+              <div className="fixed inset-0 bg-black/50" onClick={() => setShowMenu(false)}></div>
+
+              {/* Panel */}
+              <div className="relative bg-white w-72 max-w-[80%] h-full shadow-xl flex flex-col">
+                <div className="bg-gradient-to-r from-purple-800 to-indigo-900 text-white px-4 py-4 flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <div className="bg-white text-purple-800 w-8 h-8 rounded-full font-bold flex items-center justify-center text-md tracking-wider">
+                      TB
+                    </div>
+                    <div>
+                      <h2 className="font-bold text-sm tracking-wide">TAROBUN</h2>
+                      <p className="text-[10px] text-purple-200">Menu Navigasi</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setShowMenu(false)} className="p-1.5 hover:bg-white/10 rounded-lg">
+                    <i data-lucide="x" className="w-5 h-5"></i>
+                  </button>
+                </div>
+
+                <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-1">
+                  <button onClick={() => { setActiveTab('dashboard'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${activeTab === 'dashboard' ? 'bg-purple-50 text-purple-800' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="trending-up" className="w-4 h-4"></i>
+                    <span>Dasbor</span>
+                  </button>
+                  <button onClick={() => { setActiveTab('sales'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${activeTab === 'sales' ? 'bg-purple-50 text-purple-800' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="plus-circle" className="w-4 h-4"></i>
+                    <span>Input Penjualan</span>
+                  </button>
+                  <button onClick={() => { setActiveTab('inventory'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${activeTab === 'inventory' ? 'bg-purple-50 text-purple-800' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="package" className="w-4 h-4"></i>
+                    <span>SO Stok</span>
+                  </button>
+                  <button onClick={() => { setActiveTab('kedatangan'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${activeTab === 'kedatangan' ? 'bg-purple-50 text-purple-800' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="truck" className="w-4 h-4"></i>
+                    <span>Datang Barang</span>
+                  </button>
+                  <button onClick={() => { setActiveTab('wasteFoto'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${activeTab === 'wasteFoto' ? 'bg-purple-50 text-purple-800' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="camera" className="w-4 h-4"></i>
+                    <span>Foto Rijek</span>
+                    <span className="ml-auto text-[10px] bg-rose-100 text-rose-700 font-bold px-1.5 py-0.5 rounded-md">{wasteFotoList.length}</span>
+                  </button>
+                  <button onClick={() => { setActiveTab('history'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${activeTab === 'history' ? 'bg-purple-50 text-purple-800' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="history" className="w-4 h-4"></i>
+                    <span>Riwayat Laporan</span>
+                    <span className="ml-auto text-[10px] bg-indigo-100 text-indigo-700 font-bold px-1.5 py-0.5 rounded-md">{historyList.length}</span>
+                  </button>
+
+                  <div className="pt-3 mt-3 border-t border-slate-100 space-y-1">
+                    <button onClick={() => { setShowConfig(!showConfig); setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-all">
+                      <i data-lucide="settings" className="w-4 h-4"></i>
+                      <span>Pengaturan Integrasi</span>
+                    </button>
+                    <button onClick={() => { handleLoadSampleData(); setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-amber-700 hover:bg-amber-50 transition-all">
+                      <i data-lucide="sparkles" className="w-4 h-4"></i>
+                      <span>Muat Data Contoh</span>
+                    </button>
+                  </div>
+                </nav>
+              </div>
+            </div>
+          )}
 
           {/* Main Container */}
           <main className="max-w-4xl w-full mx-auto p-4">
@@ -1658,6 +2026,234 @@ Terima Kasih 🙏🏻`;
               </div>
             )}
 
+            {/* Tab: Datang Barang */}
+            {activeTab === 'kedatangan' && (
+              <div className="space-y-6">
+
+                <div className="bg-white rounded-2xl p-5 md:p-6 border border-slate-200 shadow-sm space-y-6">
+                  <div className="flex justify-between items-start gap-3">
+                    <div>
+                      <h3 className="font-bold text-slate-800 text-lg">Input Kedatangan Barang</h3>
+                      <p className="text-xs text-slate-500">Pilih barang, isi jumlah yang datang. Frozen Dough s.d. Filling wajib pakai No. Faktur/Surat Jalan.</p>
+                    </div>
+                    <button
+                      onClick={handleResetKedatanganForm}
+                      className="text-xs text-rose-600 font-bold border border-rose-100 bg-rose-50 px-3 py-1.5 rounded-lg hover:bg-rose-100 whitespace-nowrap"
+                    >
+                      Reset Form
+                    </button>
+                  </div>
+
+                  {/* Tanggal & No Surat Jalan */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">Tanggal Kedatangan</label>
+                      <input
+                        type="date"
+                        value={kedatanganForm.tanggal}
+                        onChange={(e) => setKedatanganForm({ ...kedatanganForm, tanggal: e.target.value })}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-slate-50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-purple-700 mb-1.5">No. Faktur / Surat Jalan (Kop Khusus)</label>
+                      <input
+                        type="text"
+                        value={kedatanganForm.noSuratJalan}
+                        onChange={(e) => setKedatanganForm({ ...kedatanganForm, noSuratJalan: e.target.value })}
+                        placeholder="Contoh: SJ/06/2026/0123"
+                        className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Section: Frozen Dough s/d Filling - Kop Khusus */}
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-extrabold text-purple-800 uppercase tracking-wider border-b border-purple-50 pb-2 flex items-center gap-1.5">
+                      <i data-lucide="file-signature" className="w-3.5 h-3.5"></i>
+                      <span>Frozen Dough s.d. Filling (Kop Khusus)</span>
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {KEDATANGAN_KOP_KHUSUS_ITEMS.map(item => {
+                        const khususVal = getKhususItemValue(kedatanganForm.items, item.key);
+                        return (
+                          <div key={item.key} className="bg-purple-50/30 border border-purple-100 rounded-xl p-3 space-y-2">
+                            <label className="block text-xs font-bold text-slate-700">{item.label} <span className="text-slate-400 font-normal">({item.unit})</span></label>
+                            <input
+                              type="number"
+                              value={khususVal.jumlah}
+                              onChange={(e) => handleKedatanganKhususChange(item.key, 'jumlah', e.target.value)}
+                              className="w-full px-3 py-1.5 border border-purple-200 bg-white rounded-lg text-sm"
+                              placeholder="Jumlah"
+                            />
+                            <div>
+                              <label className="block text-[10px] font-semibold text-purple-600 mb-0.5">Tanggal Produksi</label>
+                              <input
+                                type="text"
+                                value={khususVal.tanggalProduksi}
+                                onChange={(e) => handleKedatanganKhususChange(item.key, 'tanggalProduksi', e.target.value)}
+                                placeholder="Contoh: 20-06-2026"
+                                className="w-full px-2.5 py-1.5 border border-purple-200 bg-white rounded-lg text-xs"
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Section: Barang Umum */}
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-extrabold text-indigo-700 uppercase tracking-wider border-b border-indigo-50 pb-2 flex items-center gap-1.5">
+                      <i data-lucide="package" className="w-3.5 h-3.5"></i>
+                      <span>Barang Umum</span>
+                    </h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                      {KEDATANGAN_BARANG_UMUM_ITEMS.map(item => (
+                        <div key={item.key}>
+                          <label className="block text-xs font-semibold text-slate-600 mb-1">{item.label} ({item.unit})</label>
+                          <input
+                            type="number"
+                            value={kedatanganForm.items[item.key] || ''}
+                            onChange={(e) => handleKedatanganItemChange(item.key, e.target.value)}
+                            className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm"
+                            placeholder="0"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Section: Barang Tidak Sesuai Faktur/Surat Jalan */}
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-extrabold text-rose-700 uppercase tracking-wider border-b border-rose-50 pb-2 flex items-center gap-1.5">
+                      <i data-lucide="package-x" className="w-3.5 h-3.5"></i>
+                      <span>Barang Tidak Sesuai Faktur/Surat Jalan</span>
+                    </h4>
+                    <p className="text-[11px] text-slate-400">Untuk barang yang tertulis di faktur tapi tidak datang, atau datang tidak sesuai jumlah/jenis.</p>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 bg-rose-50/40 border border-rose-100 rounded-xl p-3">
+                      <input
+                        type="text"
+                        value={tidakSesuaiInput.nama}
+                        onChange={(e) => setTidakSesuaiInput({ ...tidakSesuaiInput, nama: e.target.value })}
+                        placeholder="Nama barang"
+                        className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm sm:col-span-2"
+                      />
+                      <input
+                        type="number"
+                        value={tidakSesuaiInput.jumlah}
+                        onChange={(e) => setTidakSesuaiInput({ ...tidakSesuaiInput, jumlah: e.target.value })}
+                        placeholder="Jumlah"
+                        className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm"
+                      />
+                      <select
+                        value={tidakSesuaiInput.satuan}
+                        onChange={(e) => setTidakSesuaiInput({ ...tidakSesuaiInput, satuan: e.target.value })}
+                        className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm bg-white"
+                      >
+                        <option value="pcs">pcs</option>
+                        <option value="kg">kg</option>
+                        <option value="pack">pack</option>
+                        <option value="box">box</option>
+                        <option value="botol">botol</option>
+                      </select>
+                      <input
+                        type="text"
+                        value={tidakSesuaiInput.keterangan}
+                        onChange={(e) => setTidakSesuaiInput({ ...tidakSesuaiInput, keterangan: e.target.value })}
+                        placeholder="Keterangan (opsional)"
+                        className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm sm:col-span-3"
+                      />
+                      <button
+                        onClick={handleAddTidakSesuai}
+                        className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg flex items-center justify-center gap-1.5 py-1.5"
+                      >
+                        <i data-lucide="plus" className="w-3.5 h-3.5"></i>
+                        <span>Tambah</span>
+                      </button>
+                    </div>
+
+                    {kedatanganForm.tidakSesuai.length > 0 && (
+                      <div className="divide-y divide-rose-100 border border-rose-100 rounded-xl overflow-hidden">
+                        {kedatanganForm.tidakSesuai.map(it => (
+                          <div key={it.id} className="flex justify-between items-center bg-rose-50/30 px-3 py-2">
+                            <div>
+                              <p className="text-xs font-bold text-slate-700">{it.nama} <span className="text-rose-700">- {it.jumlah} {it.satuan}</span></p>
+                              {it.keterangan && <p className="text-[10px] text-slate-500">{it.keterangan}</p>}
+                            </div>
+                            <button onClick={() => handleRemoveTidakSesuai(it.id)} className="text-rose-600 hover:bg-rose-100 p-1.5 rounded-lg">
+                              <i data-lucide="trash-2" className="w-3.5 h-3.5"></i>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Tombol Simpan & Kirim */}
+                  <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row gap-2">
+                    <button
+                      onClick={handleSaveKedatangan}
+                      disabled={isSavingKedatangan}
+                      className="flex-1 bg-purple-800 hover:bg-purple-900 disabled:opacity-50 text-white font-bold py-3 rounded-xl transition-all shadow-sm flex items-center justify-center gap-2"
+                    >
+                      <i data-lucide={isSavingKedatangan ? 'loader' : 'save'} className={`w-4 h-4 ${isSavingKedatangan ? 'animate-spin' : ''}`}></i>
+                      <span>{isSavingKedatangan ? 'Menyimpan...' : 'Simpan ke Riwayat'}</span>
+                    </button>
+                    <button
+                      onClick={() => handleSendKedatanganToTelegram(kedatanganForm)}
+                      className="bg-sky-500 hover:bg-sky-400 text-white font-bold py-3 px-4 rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 text-xs sm:text-sm"
+                    >
+                      <i data-lucide="send" className="w-4 h-4"></i>
+                      <span>Kirim Telegram</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Riwayat Kedatangan Barang */}
+                <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4">
+                  <div className="pb-3 border-b border-slate-100">
+                    <h3 className="font-bold text-slate-800 text-base">Riwayat Kedatangan Barang</h3>
+                    <p className="text-xs text-slate-500">Tersimpan di Cloud, bisa dibuka & dicek kembali kapan saja.</p>
+                  </div>
+
+                  {kedatanganHistoryList.length === 0 ? (
+                    <div className="text-center py-10 text-slate-400">
+                      <i data-lucide="truck" className="w-10 h-10 mx-auto mb-2 text-slate-300"></i>
+                      <p className="text-sm font-medium">Belum ada riwayat kedatangan barang.</p>
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-100">
+                      {kedatanganHistoryList.map(item => {
+                        const itemCount = Object.values(item.items || {}).filter(v => {
+                          if (v && typeof v === 'object') return numVal(v.jumlah) > 0;
+                          return numVal(v) > 0;
+                        }).length;
+                        const tidakSesuaiCount = (item.tidakSesuai || []).length;
+                        return (
+                          <div key={item.firebaseKey} className="py-3 flex justify-between items-center gap-2">
+                            <div className="min-w-0">
+                              <h4 className="font-bold text-slate-700 text-sm">{formatIndonesianDate(item.tanggal)}</h4>
+                              <p className="text-xs text-slate-400 truncate">
+                                {itemCount} jenis barang{item.noSuratJalan ? ` · SJ: ${item.noSuratJalan}` : ''}
+                                {tidakSesuaiCount > 0 && <span className="text-rose-500 font-semibold"> · {tidakSesuaiCount} tidak sesuai</span>}
+                              </p>
+                            </div>
+                            <div className="flex items-center space-x-2 flex-shrink-0">
+                              <button onClick={() => loadKedatanganToActive(item)} className="bg-purple-50 text-purple-700 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-purple-100">Buka</button>
+                              <button onClick={() => handleSendKedatanganToTelegram(item)} className="text-sky-600 hover:bg-sky-50 p-1.5 rounded-lg border border-sky-100" title="Kirim Telegram"><i data-lucide="send" className="w-3.5 h-3.5"></i></button>
+                              <button onClick={() => handleDeleteKedatangan(item.firebaseKey)} className="text-rose-600 hover:bg-rose-50 p-1.5 rounded-lg border border-rose-100" title="Hapus"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Tab: Foto Waste/Rijek */}
             {activeTab === 'wasteFoto' && (
               <div className="space-y-6">
@@ -1789,6 +2385,44 @@ Terima Kasih 🙏🏻`;
                     </button>
                   </div>
 
+                  {/* Navigasi Tanggal Riwayat */}
+                  <div className="flex flex-wrap items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl p-3">
+                    <button
+                      onClick={handleWasteFotoViewYesterday}
+                      className="flex items-center gap-1 bg-white border border-slate-200 text-slate-600 text-xs font-bold px-2.5 py-1.5 rounded-lg hover:bg-slate-100"
+                    >
+                      <i data-lucide="chevron-left" className="w-3.5 h-3.5"></i>
+                      <span>Hari Sebelumnya</span>
+                    </button>
+                    <input
+                      type="date"
+                      value={wasteFotoViewDate}
+                      onChange={(e) => setWasteFotoViewDate(e.target.value)}
+                      className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-semibold bg-white"
+                    />
+                    <button
+                      onClick={handleWasteFotoViewToday}
+                      className="bg-purple-50 text-purple-700 border border-purple-100 text-xs font-bold px-2.5 py-1.5 rounded-lg hover:bg-purple-100"
+                    >
+                      Hari Ini
+                    </button>
+                    {wasteFotoAvailableDates.length > 0 && (
+                      <select
+                        value=""
+                        onChange={(e) => { if (e.target.value) setWasteFotoViewDate(e.target.value); }}
+                        className="px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white text-slate-500 flex-1 min-w-[140px]"
+                      >
+                        <option value="">Lompat ke tanggal lain...</option>
+                        {wasteFotoAvailableDates.map(d => (
+                          <option key={d} value={d}>{formatIndonesianDate(d)}</option>
+                        ))}
+                      </select>
+                    )}
+                    <span className="text-xs font-bold text-purple-800 ml-auto">
+                      Menampilkan: {formatIndonesianDate(wasteFotoViewDate)}
+                    </span>
+                  </div>
+
                   {Object.keys(WASTE_CATEGORIES).map(key => {
                     const cat = WASTE_CATEGORIES[key];
                     const styles = WASTE_COLOR_STYLES[cat.color];
@@ -1814,7 +2448,7 @@ Terima Kasih 🙏🏻`;
                         </div>
 
                         {group.items.length === 0 ? (
-                          <p className="text-xs text-slate-400 text-center py-4">Belum ada foto pada kategori ini.</p>
+                          <p className="text-xs text-slate-400 text-center py-4">Belum ada foto pada kategori ini untuk tanggal {formatIndonesianDate(wasteFotoViewDate)}.</p>
                         ) : (
                           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
                             {group.items.map(item => (
@@ -1885,30 +2519,6 @@ Terima Kasih 🙏🏻`;
             )}
 
           </main>
-
-          {/* Bottom Tabs Navigation */}
-          <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-lg px-4 py-2 z-30 flex justify-around items-center max-w-4xl mx-auto">
-            <button onClick={() => setActiveTab('dashboard')} className={`flex flex-col items-center space-y-1 py-1 px-2 rounded-xl ${activeTab === 'dashboard' ? 'text-purple-800 bg-purple-50 font-bold' : 'text-slate-400'}`}>
-              <i data-lucide="trending-up" className="w-5 h-5"></i>
-              <span className="text-[10px]">Dasbor</span>
-            </button>
-            <button onClick={() => setActiveTab('sales')} className={`flex flex-col items-center space-y-1 py-1 px-2 rounded-xl ${activeTab === 'sales' ? 'text-purple-800 bg-purple-50 font-bold' : 'text-slate-400'}`}>
-              <i data-lucide="plus-circle" className="w-5 h-5"></i>
-              <span className="text-[10px]">Input</span>
-            </button>
-            <button onClick={() => setActiveTab('inventory')} className={`flex flex-col items-center space-y-1 py-1 px-2 rounded-xl ${activeTab === 'inventory' ? 'text-purple-800 bg-purple-50 font-bold' : 'text-slate-400'}`}>
-              <i data-lucide="package" className="w-5 h-5"></i>
-              <span className="text-[10px]">SO Stok</span>
-            </button>
-            <button onClick={() => setActiveTab('wasteFoto')} className={`flex flex-col items-center space-y-1 py-1 px-2 rounded-xl ${activeTab === 'wasteFoto' ? 'text-purple-800 bg-purple-50 font-bold' : 'text-slate-400'}`}>
-              <i data-lucide="camera" className="w-5 h-5"></i>
-              <span className="text-[10px]">Foto Rijek ({wasteFotoList.length})</span>
-            </button>
-            <button onClick={() => setActiveTab('history')} className={`flex flex-col items-center space-y-1 py-1 px-2 rounded-xl ${activeTab === 'history' ? 'text-purple-800 bg-purple-50 font-bold' : 'text-slate-400'}`}>
-              <i data-lucide="history" className="w-5 h-5"></i>
-              <span className="text-[10px]">Riwayat ({historyList.length})</span>
-            </button>
-          </nav>
 
         </div>
       );
