@@ -729,7 +729,10 @@ const { useState, useEffect } = React;
         if (!label) return;
         setSavingField(true);
         try {
-          await restPush(db.ref(`formSchemas/${newFieldTarget}`), { label, unit: newFieldUnit.trim(), type: newFieldType });
+          const fieldData = { label, unit: newFieldUnit.trim(), type: newFieldType };
+          const result = await restPush(db.ref(`formSchemas/${newFieldTarget}`), fieldData);
+          const newId = (result && result.name) ? result.name : ('local-' + Date.now());
+          setFormSchemas(prev => ({ ...prev, [newFieldTarget]: [...(prev[newFieldTarget] || []), { id: newId, ...fieldData }] }));
           setNewFieldLabel('');
           setNewFieldUnit('');
         } catch (err) {
@@ -742,6 +745,7 @@ const { useState, useEffect } = React;
       const handleDeleteFormField = async (target, id) => {
         try {
           await restRemove(db.ref(`formSchemas/${target}/${id}`));
+          setFormSchemas(prev => ({ ...prev, [target]: (prev[target] || []).filter(f => f.id !== id) }));
         } catch (err) {
           console.error(err);
         }
@@ -916,6 +920,8 @@ const { useState, useEffect } = React;
           setCreatedToken({ id, name, token: tokenVal });
           setNewStoreName('');
           setShowAdd(false);
+          // Langsung muncul di daftar toko admin, tidak perlu refresh manual.
+          setStores(prev => [{ id, name, uid, createdAt: Date.now(), active: true, token: tokenVal }, ...prev]);
         } catch (err) {
           console.error(err);
           setErrorMsg('Gagal membuat toko. Pastikan Firebase Authentication (Email/Password) sudah diaktifkan di Firebase Console.');
@@ -983,6 +989,7 @@ const { useState, useEffect } = React;
           if (store.uid) await restRemove(db.ref(`storeUidMap/${store.uid}`));
           setConfirmDelete(null);
           setDetailStore(null);
+          setStores(prev => prev.filter(s => s.id !== store.id));
         } catch (err) {
           console.error(err);
         }
@@ -992,7 +999,9 @@ const { useState, useEffect } = React;
 
       const handleToggleActive = async (store) => {
         try {
-          await restSet(db.ref(`stores/${store.id}/info/active`), store.active === false ? true : false);
+          const newActive = store.active === false ? true : false;
+          await restSet(db.ref(`stores/${store.id}/info/active`), newActive);
+          setStores(prev => prev.map(s => s.id === store.id ? { ...s, active: newActive } : s));
         } catch (err) {
           console.error(err);
         }
@@ -1967,6 +1976,12 @@ useEffect(() => {
           // Menggunakan sistem update berbasis tanggal agar data di tanggal yang sama ter-overwrite/diperbarui otomatis
           await restSet(db.ref(`${storeBase}/history/` + idEntry), payload);
           showToast('Laporan berhasil disimpan di Cloud & HP! 📱✨');
+          // Update tampilan riwayat SEKETIKA, tidak nunggu listener realtime (yang bisa lambat
+          // di jaringan tertentu) — supaya tidak perlu refresh manual untuk melihat data baru.
+          setHistoryList(prev => {
+            const withoutOld = prev.filter(item => item.firebaseKey !== idEntry);
+            return [...withoutOld, { ...payload, firebaseKey: idEntry }].sort((a, b) => b.tanggal.localeCompare(a.tanggal));
+          });
           
           // Sync dengan Google Apps Script jika URL disediakan
           if (config.googleAppScriptUrl) {
@@ -2228,6 +2243,7 @@ Terima Kasih 🙏🏻`;
           showToast('Menghapus dari Cloud... 🗑️');
           await restRemove(db.ref(`${storeBase}/history/` + id));
           showToast('Riwayat berhasil dihapus dari Cloud.');
+          setHistoryList(prev => prev.filter(item => item.firebaseKey !== id));
         } catch (error) {
           showToast('Gagal menghapus data.');
         }
@@ -2364,6 +2380,7 @@ Daily inventory done✅
           };
           await restSet(db.ref(`${storeBase}/kedatanganBarang/` + now), payload);
           showToast('Data kedatangan barang tersimpan ke Riwayat! 📦✨');
+          setKedatanganHistoryList(prev => [...prev, { ...payload, firebaseKey: now.toString() }].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
           handleResetKedatanganForm();
         } catch (error) {
           console.error(error);
@@ -2378,6 +2395,7 @@ Daily inventory done✅
           showToast('Menghapus data... 🗑️');
           await restRemove(db.ref(`${storeBase}/kedatanganBarang/` + firebaseKey));
           showToast('Data kedatangan barang berhasil dihapus.');
+          setKedatanganHistoryList(prev => prev.filter(item => item.firebaseKey !== firebaseKey));
         } catch (error) {
           showToast('Gagal menghapus data.');
         }
@@ -2639,6 +2657,7 @@ Daily inventory done✅
           };
           await restSet(db.ref(`${storeBase}/wasteFotos/` + now), payload);
           showToast('Foto tersimpan ke Riwayat! Silakan input foto baru lagi 📷✨');
+          setWasteFotoList(prev => [...prev, { ...payload, firebaseKey: now.toString() }].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
           setWasteFotoViewDate(payload.tanggal);
           handleResetWasteFotoForm(true);
         } catch (error) {
@@ -2654,6 +2673,7 @@ Daily inventory done✅
           showToast('Menghapus foto... 🗑️');
           await restRemove(db.ref(`${storeBase}/wasteFotos/` + firebaseKey));
           showToast('Foto berhasil dihapus dari Riwayat.');
+          setWasteFotoList(prev => prev.filter(item => item.firebaseKey !== firebaseKey));
         } catch (error) {
           showToast('Gagal menghapus foto.');
         }
@@ -3088,6 +3108,7 @@ Daily inventory done✅
 
           // 1. Simpan ke Cloud Firebase dulu, agar riwayat tetap tersimpan walau pengiriman Telegram gagal
           await restSet(db.ref(`${storeBase}/suhuReports/` + now), payload);
+          setSuhuReportList(prev => [...prev, { ...payload, firebaseKey: now.toString() }].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
           setSuhuViewDate(tanggal);
 
           // 2. Buat 1 foto kolase otomatis dari seluruh foto, lalu kirim ke Telegram lengkap dengan keterangan
@@ -3145,6 +3166,7 @@ Daily inventory done✅
           showToast('Menghapus laporan suhu... 🗑️');
           await restRemove(db.ref(`${storeBase}/suhuReports/` + firebaseKey));
           showToast('Laporan suhu berhasil dihapus dari Riwayat.');
+          setSuhuReportList(prev => prev.filter(item => item.firebaseKey !== firebaseKey));
         } catch (error) {
           showToast('Gagal menghapus laporan.');
         }
@@ -4781,13 +4803,13 @@ Daily inventory done✅
         const trimmed = text.trim().slice(0, 1000); // batasi panjang pesan (anti abuse)
         if (!trimmed) return;
         setSending(true);
+        const optimisticMsg = { sender: senderRole, senderLabel, text: trimmed, timestamp: Date.now() };
         try {
-          await restPush(db.ref(`chats/${storeId}/messages`), {
-            sender: senderRole, // 'admin' atau 'store'
-            senderLabel,
-            text: trimmed,
-            timestamp: Date.now()
-          });
+          const result = await restPush(db.ref(`chats/${storeId}/messages`), optimisticMsg);
+          // Langsung tampilkan pesan di layar SEKETIKA (tidak nunggu listener realtime),
+          // supaya tidak perlu refresh manual untuk melihat pesan sendiri.
+          const newId = (result && result.name) ? result.name : ('local-' + optimisticMsg.timestamp);
+          setMessages(prev => [...prev, { id: newId, ...optimisticMsg }].sort((a, b) => a.timestamp - b.timestamp));
           setText('');
         } catch (err) {
           console.error(err);
@@ -4802,6 +4824,7 @@ Daily inventory done✅
         setEnding(true);
         try {
           await restRemove(db.ref(`chats/${storeId}`));
+          setMessages([]);
           setConfirmEnd(false);
         } catch (err) {
           console.error(err);
