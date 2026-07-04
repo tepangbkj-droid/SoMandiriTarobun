@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
-  <title>Tarobun SO Hub</title>
+  <title>Tarobun Green Pramuka Hub</title>
 
   <!-- Pengerasan keamanan dasar sisi browser (mitigasi injeksi script/clickjacking) -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.tailwindcss.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com; img-src 'self' data: blob: https:; font-src 'self' data: https://unpkg.com; connect-src 'self' https://*.firebaseio.com https://*.firebasedatabase.app wss://*.firebaseio.com wss://*.firebasedatabase.app https://*.googleapis.com https://unpkg.com https://api.telegram.org; frame-ancestors 'none'; base-uri 'self'; object-src 'none';">
@@ -237,6 +237,24 @@ const { useState, useEffect } = React;
     // pesan butuh terasa INSTAN, sedangkan .push()/.remove() dari SDK tetap lewat WebSocket yang
     // sama-sama bisa lambat/diblokir jaringan seperti pembacaan data. Kalau REST gagal (mis. jaringan
     // benar-benar putus total), otomatis fallback ke cara SDK biasa supaya tetap ada jalan keluar.
+    // Pengganti untuk .set(data) — dipakai di SEMUA proses simpan (laporan penjualan, inventory,
+    // kedatangan barang, cek suhu, kelola toko admin, dsb). Sama seperti restPush/restRemove:
+    // coba HTTPS biasa dulu (tidak bergantung WebSocket), fallback ke SDK kalau REST gagal total.
+    const restSet = async (ref, data) => {
+      try {
+        const url = await restUrlFor(ref);
+        const res = await fetchWithRetry(url, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        }, 1, 1200);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      } catch (e) {
+        return ref.set(data);
+      }
+    };
+
     const restPush = async (ref, data) => {
       try {
         const url = await restUrlFor(ref);
@@ -571,8 +589,8 @@ const { useState, useEffect } = React;
             if (adminPassword.length < 8) { setError('Password minimal 8 karakter.'); setLoading(false); return; }
             if (adminPassword !== adminPassword2) { setError('Konfirmasi password tidak cocok.'); setLoading(false); return; }
             const cred = await auth.createUserWithEmailAndPassword(ADMIN_EMAIL, adminPassword);
-            await db.ref(`admins/${cred.user.uid}`).set(true);
-            await db.ref('meta/adminAccountExists').set(true);
+            await restSet(db.ref(`admins/${cred.user.uid}`), true);
+            await restSet(db.ref('meta/adminAccountExists'), true);
             saveSession('admin', {});
             onLoggedIn({ role: 'admin' });
             return;
@@ -594,7 +612,7 @@ const { useState, useEffect } = React;
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 sm:p-8">
             <div className="flex flex-col items-center mb-6">
               <div className="bg-purple-800 text-white w-14 h-14 rounded-2xl font-bold flex items-center justify-center text-xl tracking-wider mb-3">TB</div>
-              <h1 className="font-bold text-slate-800 text-lg">TAROBUN SO Hub</h1>
+              <h1 className="font-bold text-slate-800 text-lg">TAROBUN Green Pramuka Hub</h1>
               <p className="text-xs text-slate-400 text-center mt-1">Masuk sebagai toko atau admin pusat</p>
             </div>
 
@@ -711,7 +729,7 @@ const { useState, useEffect } = React;
         if (!label) return;
         setSavingField(true);
         try {
-          await db.ref(`formSchemas/${newFieldTarget}`).push({ label, unit: newFieldUnit.trim(), type: newFieldType });
+          await restPush(db.ref(`formSchemas/${newFieldTarget}`), { label, unit: newFieldUnit.trim(), type: newFieldType });
           setNewFieldLabel('');
           setNewFieldUnit('');
         } catch (err) {
@@ -723,7 +741,7 @@ const { useState, useEffect } = React;
 
       const handleDeleteFormField = async (target, id) => {
         try {
-          await db.ref(`formSchemas/${target}/${id}`).remove();
+          await restRemove(db.ref(`formSchemas/${target}/${id}`));
         } catch (err) {
           console.error(err);
         }
@@ -749,7 +767,7 @@ const { useState, useEffect } = React;
       const finishAdminOnboarding = () => {
         localStorage.setItem('tarobun_onboarding_admin', '1');
         const uid = auth.currentUser && auth.currentUser.uid;
-        if (uid) db.ref(`admins/${uid}/onboardingSeen`).set(true).catch(() => {});
+        if (uid) restSet(db.ref(`admins/${uid}/onboardingSeen`), true).catch(() => {});
         setShowOnboarding(false);
       };
       const [errorMsg, setErrorMsg] = useState('');
@@ -891,9 +909,9 @@ const { useState, useEffect } = React;
           const uid = cred.user.uid;
           await secondaryAuth.signOut();
 
-          await db.ref(`stores/${id}/info`).set({ name, uid, createdAt: Date.now(), active: true, token: tokenVal });
-          await db.ref(`storeUidMap/${uid}`).set(id);
-          await db.ref(`storeDirectory/${id}`).set(name);
+          await restSet(db.ref(`stores/${id}/info`), { name, uid, createdAt: Date.now(), active: true, token: tokenVal });
+          await restSet(db.ref(`storeUidMap/${uid}`), id);
+          await restSet(db.ref(`storeDirectory/${id}`), name);
 
           setCreatedToken({ id, name, token: tokenVal });
           setNewStoreName('');
@@ -921,7 +939,7 @@ const { useState, useEffect } = React;
         setSavingTelegram(true);
         setTelegramSaved(false);
         try {
-          await db.ref(`stores/${detailStore.id}/telegramConfig`).set({
+          await restSet(db.ref(`stores/${detailStore.id}/telegramConfig`), {
             botToken: telegramForm.botToken.trim(),
             chatId: telegramForm.chatId.trim(),
           });
@@ -947,7 +965,7 @@ const { useState, useEffect } = React;
           const cred = await secondaryAuth.signInWithEmailAndPassword(email, oldToken);
           await cred.user.updatePassword(newToken);
           await secondaryAuth.signOut();
-          await db.ref(`stores/${store.id}/info/token`).set(newToken);
+          await restSet(db.ref(`stores/${store.id}/info/token`), newToken);
           setRegeneratedToken(newToken);
           setDetailStore(prev => prev ? { ...prev, token: newToken } : prev);
         } catch (err) {
@@ -960,9 +978,9 @@ const { useState, useEffect } = React;
 
       const handleDeleteStore = async (store) => {
         try {
-          await db.ref(`stores/${store.id}`).remove();
-          await db.ref(`storeDirectory/${store.id}`).remove();
-          if (store.uid) await db.ref(`storeUidMap/${store.uid}`).remove();
+          await restRemove(db.ref(`stores/${store.id}`));
+          await restRemove(db.ref(`storeDirectory/${store.id}`));
+          if (store.uid) await restRemove(db.ref(`storeUidMap/${store.uid}`));
           setConfirmDelete(null);
           setDetailStore(null);
         } catch (err) {
@@ -974,7 +992,7 @@ const { useState, useEffect } = React;
 
       const handleToggleActive = async (store) => {
         try {
-          await db.ref(`stores/${store.id}/info/active`).set(store.active === false ? true : false);
+          await restSet(db.ref(`stores/${store.id}/info/active`), store.active === false ? true : false);
         } catch (err) {
           console.error(err);
         }
@@ -1442,7 +1460,7 @@ const { useState, useEffect } = React;
 
       const finishStoreOnboarding = () => {
         localStorage.setItem(`tarobun_onboarding_store_${storeId}`, '1');
-        db.ref(`${storeBase}/info/onboardingSeen`).set(true).catch(() => {});
+        restSet(db.ref(`${storeBase}/info/onboardingSeen`), true).catch(() => {});
         setShowOnboarding(false);
       };
       const [unreadChat, setUnreadChat] = useState(0);
@@ -1947,7 +1965,7 @@ useEffect(() => {
         try {
           showToast('Menyimpan ke Cloud Firebase... ☁️');
           // Menggunakan sistem update berbasis tanggal agar data di tanggal yang sama ter-overwrite/diperbarui otomatis
-          await db.ref(`${storeBase}/history/` + idEntry).set(payload);
+          await restSet(db.ref(`${storeBase}/history/` + idEntry), payload);
           showToast('Laporan berhasil disimpan di Cloud & HP! 📱✨');
           
           // Sync dengan Google Apps Script jika URL disediakan
@@ -2208,7 +2226,7 @@ Terima Kasih 🙏🏻`;
       const handleDeleteHistory = async (id) => {
         try {
           showToast('Menghapus dari Cloud... 🗑️');
-          await db.ref(`${storeBase}/history/` + id).remove();
+          await restRemove(db.ref(`${storeBase}/history/` + id));
           showToast('Riwayat berhasil dihapus dari Cloud.');
         } catch (error) {
           showToast('Gagal menghapus data.');
@@ -2344,7 +2362,7 @@ Daily inventory done✅
             tidakSesuai: [...kedatanganForm.tidakSesuai],
             createdAt: now
           };
-          await db.ref(`${storeBase}/kedatanganBarang/` + now).set(payload);
+          await restSet(db.ref(`${storeBase}/kedatanganBarang/` + now), payload);
           showToast('Data kedatangan barang tersimpan ke Riwayat! 📦✨');
           handleResetKedatanganForm();
         } catch (error) {
@@ -2358,7 +2376,7 @@ Daily inventory done✅
       const handleDeleteKedatangan = async (firebaseKey) => {
         try {
           showToast('Menghapus data... 🗑️');
-          await db.ref(`${storeBase}/kedatanganBarang/` + firebaseKey).remove();
+          await restRemove(db.ref(`${storeBase}/kedatanganBarang/` + firebaseKey));
           showToast('Data kedatangan barang berhasil dihapus.');
         } catch (error) {
           showToast('Gagal menghapus data.');
@@ -2619,7 +2637,7 @@ Daily inventory done✅
             tanggal: new Date(now).toISOString().split('T')[0],
             createdAt: now
           };
-          await db.ref(`${storeBase}/wasteFotos/` + now).set(payload);
+          await restSet(db.ref(`${storeBase}/wasteFotos/` + now), payload);
           showToast('Foto tersimpan ke Riwayat! Silakan input foto baru lagi 📷✨');
           setWasteFotoViewDate(payload.tanggal);
           handleResetWasteFotoForm(true);
@@ -2634,7 +2652,7 @@ Daily inventory done✅
       const handleDeleteWasteFoto = async (firebaseKey) => {
         try {
           showToast('Menghapus foto... 🗑️');
-          await db.ref(`${storeBase}/wasteFotos/` + firebaseKey).remove();
+          await restRemove(db.ref(`${storeBase}/wasteFotos/` + firebaseKey));
           showToast('Foto berhasil dihapus dari Riwayat.');
         } catch (error) {
           showToast('Gagal menghapus foto.');
@@ -3069,7 +3087,7 @@ Daily inventory done✅
           };
 
           // 1. Simpan ke Cloud Firebase dulu, agar riwayat tetap tersimpan walau pengiriman Telegram gagal
-          await db.ref(`${storeBase}/suhuReports/` + now).set(payload);
+          await restSet(db.ref(`${storeBase}/suhuReports/` + now), payload);
           setSuhuViewDate(tanggal);
 
           // 2. Buat 1 foto kolase otomatis dari seluruh foto, lalu kirim ke Telegram lengkap dengan keterangan
@@ -3125,7 +3143,7 @@ Daily inventory done✅
       const handleDeleteSuhuReport = async (firebaseKey) => {
         try {
           showToast('Menghapus laporan suhu... 🗑️');
-          await db.ref(`${storeBase}/suhuReports/` + firebaseKey).remove();
+          await restRemove(db.ref(`${storeBase}/suhuReports/` + firebaseKey));
           showToast('Laporan suhu berhasil dihapus dari Riwayat.');
         } catch (error) {
           showToast('Gagal menghapus laporan.');
