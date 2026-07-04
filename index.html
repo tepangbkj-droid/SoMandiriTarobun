@@ -149,6 +149,25 @@ const { useState, useEffect } = React;
     const clearSession = () => localStorage.removeItem(SESSION_KEY);
 
     // ==========================================
+    // FETCH DENGAN AUTO-RETRY (khusus dipakai untuk request ke Telegram)
+    // ==========================================
+    // Kirim laporan ke Telegram sering "gagal terhubung" bukan karena Bot Token/Chat ID
+    // salah, tapi karena koneksi HP sempat putus-nyambung sepersekian detik (pindah BTS,
+    // WiFi<->data seluler, dsb). Sebelumnya sekali gagal langsung tampil toast error dan
+    // laporan harus dikirim ulang manual. Sekarang setiap request ke Telegram otomatis
+    // dicoba lagi sampai 2x tambahan (dengan jeda singkat) SEBELUM benar-benar dianggap gagal.
+    const fetchWithRetry = async (url, options, retries = 2, delayMs = 1200) => {
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+          return await fetch(url, options);
+        } catch (err) {
+          if (attempt === retries) throw err;
+          await new Promise((resolve) => setTimeout(resolve, delayMs * (attempt + 1)));
+        }
+      }
+    };
+
+    // ==========================================
     // AUTO-HAPUS DATA LAMA (>30 HARI) & NOTIFIKASI BROWSER
     // ==========================================
     const DATA_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 hari, agar database & aplikasi tetap ringan
@@ -270,6 +289,7 @@ const { useState, useEffect } = React;
       const [storeDirectory, setStoreDirectory] = useState([]);
       const [dirLoading, setDirLoading] = useState(true);
       const [dirError, setDirError] = useState(false);
+      const [dirFromCache, setDirFromCache] = useState(false);
       const [adminCheckError, setAdminCheckError] = useState(false);
       const [reloadTick, setReloadTick] = useState(0);
       const [error, setError] = useState('');
@@ -285,45 +305,122 @@ const { useState, useEffect } = React;
         if (window.lucide) window.lucide.createIcons();
       });
 
-      // Ambil status admin & daftar toko. Diberi timeout + tombol "Muat Ulang" supaya kalau koneksi
-      // Firebase lambat/terputus, layar tidak "gantung" kosong tanpa penjelasan (ini penyebab utama
-      // keluhan "pilih toko tidak muncul" & "login admin tidak bisa" saat koneksi kurang stabil).
+      // Ambil status admin & daftar toko. Diberi timeout + AUTO-RETRY (dengan jeda makin lama) +
+      // tombol "Muat Ulang" manual, supaya kalau koneksi Firebase lambat/putus-nyambung (jaringan
+      // seluler lemah, baru pindah WiFi/data, dsb), aplikasi mencoba lagi sendiri beberapa kali dulu
+      // sebelum benar-benar menampilkan pesan error ke pengguna (ini penyebab utama keluhan
+      // "pilih toko tidak muncul" / "gagal memuat data dari server" saat koneksi kurang stabil).
       useEffect(() => {
-        let settled = false;
+        let cancelled = false;
+        let attempt = 0;
+        const MAX_ATTEMPTS = 3;
+
         setDirLoading(true);
         setDirError(false);
         setAdminCheckError(false);
 
-        const timeoutId = setTimeout(() => {
-          if (!settled) {
-            setDirLoading(false);
-            setDirError(true);
-          }
-        }, 10000);
+        const REST_ROOT = firebaseConfig.databaseURL.replace(/\/$/, '');
 
-        db.ref('meta/adminAccountExists').once('value')
-          .then(snap => setAdminExists(snap.val() === true))
-          .catch(() => { setAdminExists(null); setAdminCheckError(true); });
-
-        const dirRef = db.ref('storeDirectory');
-        const handler = (snap) => {
-          settled = true;
-          clearTimeout(timeoutId);
-          const data = snap.val() || {};
-          setStoreDirectory(Object.keys(data).map(id => ({ id, name: data[id] })).sort((a, b) => a.name.localeCompare(b.name)));
-          setDirLoading(false);
-          setDirError(false);
+        // PENTING: sebelumnya pakai db.ref(...).on('value', ...) dari Firebase SDK, yang di
+        // belakang layar memakai koneksi WebSocket (wss://). Di sebagian jaringan seluler
+        // Indonesia, WebSocket ke domain yang jarang dikenal suka diblokir/diganggu oleh
+        // operator, PADAHAL request HTTPS biasa (seperti login) tetap lancar. Makanya dulu
+        // gejalanya: login jalan normal, tapi daftar toko selalu gagal dimuat.
+        // Sekarang kedua data ini diambil pakai fetch() HTTPS biasa (REST API bawaan Firebase
+        // Realtime Database, format ".json"), BUKAN WebSocket, jadi jauh lebih tahan terhadap
+        // jaringan seluler yang membatasi WebSocket.
+        const tryLoad = () => {
+          attempt += 1;
+          fetchWithRetry(`${REST_ROOT}/storeDirectory.json`, {}, 1, 1500)
+            .then(res => {
+              if (cancelled) return;
+              if (!res.ok) throw new Error('HTTP ' + res.status);
+              return res.json();
+            })
+            .then(data => {
+              if (cancelled) return;
+              data = data || {};
+              const list = Object.keys(data).map(id => ({ id, name: data[id] })).sort((a, b) => a.name.localeCompare(b.name));
+              setStoreDirectory(list);
+              setDirLoading(false);
+              setDirError(false);
+              setDirFromCache(false);
+              try { localStorage.setItem('tarobun_dir_cache', JSON.stringify(list)); } catch (e) {}
+            })
+            .catch(() => {
+              if (cancelled) return;
+              if (attempt < MAX_ATTEMPTS) {
+                setTimeout(tryLoad, 1000 * attempt); // jeda makin lama tiap percobaan ulang
+              } else {
+                useDirCacheFallback();
+              }
+            });
         };
-        const errHandler = () => {
-          settled = true;
-          clearTimeout(timeoutId);
+
+        // Kalau semua percobaan koneksi ke database gagal (jaringan benar-benar bermasalah),
+        // jangan langsung "buntu" — pakai daftar toko terakhir yang berhasil dimuat & tersimpan
+        // di HP ini (localStorage), supaya toko/admin tetap bisa mencoba login sambil menunggu
+        // koneksi pulih. Tombol "Muat Ulang" tetap tersedia untuk coba ambil data terbaru lagi.
+        const useDirCacheFallback = () => {
           setDirLoading(false);
+          try {
+            const cached = JSON.parse(localStorage.getItem('tarobun_dir_cache') || 'null');
+            if (cached && cached.length > 0) {
+              setStoreDirectory(cached);
+              setDirFromCache(true);
+              setDirError(false);
+              return;
+            }
+          } catch (e) {}
           setDirError(true);
         };
-        dirRef.on('value', handler, errHandler);
 
-        return () => { clearTimeout(timeoutId); dirRef.off('value', handler); };
+        const tryAdminCheck = (n) => {
+          fetchWithRetry(`${REST_ROOT}/meta/adminAccountExists.json`, {}, 1, 1500)
+            .then(res => {
+              if (!res.ok) throw new Error('HTTP ' + res.status);
+              return res.json();
+            })
+            .then(val => {
+              if (cancelled) return;
+              const exists = val === true;
+              setAdminExists(exists);
+              try { localStorage.setItem('tarobun_admin_exists_cache', JSON.stringify(exists)); } catch (e) {}
+            })
+            .catch(() => {
+              if (cancelled) return;
+              if (n < MAX_ATTEMPTS) {
+                setTimeout(() => tryAdminCheck(n + 1), 1000 * n);
+              } else {
+                try {
+                  const cached = JSON.parse(localStorage.getItem('tarobun_admin_exists_cache') || 'null');
+                  if (cached !== null) { setAdminExists(cached); return; }
+                } catch (e) {}
+                setAdminExists(null);
+                setAdminCheckError(true);
+              }
+            });
+        };
+
+        tryLoad();
+        tryAdminCheck(1);
+
+        return () => {
+          cancelled = true;
+        };
       }, [reloadTick]);
+
+      // Deteksi koneksi nyata: kalau HP sempat kehilangan sinyal/WiFi lalu nyambung lagi, browser
+      // akan memicu event 'online'. Sebelumnya, kalau error sudah terlanjur muncul, pengguna HARUS
+      // pencet "Muat Ulang" manual walau internetnya sudah pulih. Sekarang begitu koneksi pulih,
+      // otomatis dicoba ulang sendiri tanpa perlu disentuh.
+      useEffect(() => {
+        const handleOnline = () => {
+          if (dirError || adminCheckError) setReloadTick(t => t + 1);
+        };
+        window.addEventListener('online', handleOnline);
+        return () => window.removeEventListener('online', handleOnline);
+      }, [dirError, adminCheckError]);
 
       const attemptKeyFor = (id) => `login_${mode}_${id}`;
 
@@ -399,7 +496,7 @@ const { useState, useEffect } = React;
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 sm:p-8">
             <div className="flex flex-col items-center mb-6">
               <div className="bg-purple-800 text-white w-14 h-14 rounded-2xl font-bold flex items-center justify-center text-xl tracking-wider mb-3">TB</div>
-              <h1 className="font-bold text-slate-800 text-lg">TAROBUN Green Pramuka Hub</h1>
+              <h1 className="font-bold text-slate-800 text-lg">TAROBUN HUB SO</h1>
               <p className="text-xs text-slate-400 text-center mt-1">Masuk sebagai toko atau admin pusat</p>
             </div>
 
@@ -416,6 +513,13 @@ const { useState, useEffect } = React;
               <div className="bg-amber-50 border border-amber-200 text-amber-700 text-xs font-semibold rounded-lg px-3 py-2 mb-4 flex items-center justify-between gap-2">
                 <span>Gagal memuat data dari server. Cek koneksi internet Anda.</span>
                 <button type="button" onClick={() => setReloadTick(t => t + 1)} className="shrink-0 bg-amber-600 text-white text-[10px] font-bold px-2 py-1 rounded-lg">Muat Ulang</button>
+              </div>
+            )}
+
+            {dirFromCache && !dirError && (
+              <div className="bg-sky-50 border border-sky-200 text-sky-700 text-xs font-semibold rounded-lg px-3 py-2 mb-4 flex items-center justify-between gap-2">
+                <span>Koneksi lambat — menampilkan data toko tersimpan (mungkin tidak terbaru).</span>
+                <button type="button" onClick={() => setReloadTick(t => t + 1)} className="shrink-0 bg-sky-600 text-white text-[10px] font-bold px-2 py-1 rounded-lg">Sinkron Ulang</button>
               </div>
             )}
 
@@ -575,6 +679,57 @@ const { useState, useEffect } = React;
         return () => ref.off('value', handler);
       }, []);
 
+      // Live-update untuk modal detail toko. Sebelumnya pakai once('value') sehingga data (riwayat,
+      // foto rijek, Telegram) di modal TIDAK otomatis ter-refresh selagi modal terbuka — admin harus
+      // tutup lalu buka lagi untuk lihat laporan terbaru. Sekarang pakai listener realtime (.on) supaya
+      // otomatis ter-update sendiri begitu ada laporan/foto baru masuk dari toko.
+      useEffect(() => {
+        if (!detailStore) return;
+        setDetailData(null);
+        setDetailLoading(true);
+        const storeId = detailStore.id;
+        const historyRef = db.ref(`stores/${storeId}/history`);
+        const wasteRef = db.ref(`stores/${storeId}/wasteFotos`);
+        const tgRef = db.ref(`stores/${storeId}/telegramConfig`);
+
+        let historyList = [];
+        let wasteList = [];
+        let gotHistory = false, gotWaste = false;
+
+        const pushUpdate = () => {
+          if (gotHistory && gotWaste) {
+            setDetailData({ historyList, wasteList });
+            setDetailLoading(false);
+          }
+        };
+        const historyHandler = (snap) => {
+          const data = snap.val() || {};
+          historyList = Object.values(data).sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''));
+          gotHistory = true;
+          pushUpdate();
+        };
+        const wasteHandler = (snap) => {
+          const data = snap.val() || {};
+          wasteList = Object.values(data).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          gotWaste = true;
+          pushUpdate();
+        };
+        const tgHandler = (snap) => {
+          const tg = snap.val() || {};
+          setTelegramForm({ botToken: tg.botToken || '', chatId: tg.chatId || '' });
+        };
+
+        historyRef.on('value', historyHandler);
+        wasteRef.on('value', wasteHandler);
+        tgRef.on('value', tgHandler);
+
+        return () => {
+          historyRef.off('value', historyHandler);
+          wasteRef.off('value', wasteHandler);
+          tgRef.off('value', tgHandler);
+        };
+      }, [detailStore && detailStore.id]);
+
       // Bersihkan otomatis data seluruh toko yang usianya lebih dari 30 hari setiap kali admin membuka panel.
       // Ini pelengkap pembersihan di sisi toko, memastikan data tetap ringan walau toko jarang login.
       useEffect(() => {
@@ -658,31 +813,12 @@ const { useState, useEffect } = React;
         }
       };
 
-      const openDetail = async (store) => {
+      const openDetail = (store) => {
         setDetailStore(store);
-        setDetailData(null);
-        setDetailLoading(true);
         setShowToken(false);
         setTelegramSaved(false);
         setRegeneratedToken(null);
-        try {
-          const [historySnap, wasteSnap, tgSnap] = await Promise.all([
-            db.ref(`stores/${store.id}/history`).once('value'),
-            db.ref(`stores/${store.id}/wasteFotos`).once('value'),
-            db.ref(`stores/${store.id}/telegramConfig`).once('value'),
-          ]);
-          const historyData = historySnap.val() || {};
-          const wasteData = wasteSnap.val() || {};
-          const historyList = Object.values(historyData).sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''));
-          const wasteList = Object.values(wasteData).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-          const tg = tgSnap.val() || {};
-          setTelegramForm({ botToken: tg.botToken || '', chatId: tg.chatId || '' });
-          setDetailData({ historyList, wasteList });
-        } catch (err) {
-          console.error(err);
-        } finally {
-          setDetailLoading(false);
-        }
+        // Data (riwayat, foto rijek, Telegram) diambil otomatis & realtime oleh useEffect di atas.
       };
 
       // Simpan Bot Token & Chat ID Telegram khusus toko ini. Hanya admin yang bisa mengatur ini —
@@ -1835,7 +1971,7 @@ useEffect(() => {
         const totalBuns = calculateTotalBunsSold(sales.soldBuns);
         const totalBeverages = calculateTotalBeveragesSold(sales.soldBeverages);
 
-        return `*LAPORAN PENJUALAN TAROBUN GREEN PRAMUKA*
+        return `*LAPORAN PENJUALAN TAROBUN ${escapeTelegramMarkdown(storeName || '-').toUpperCase()}*
 Tanggal: ${formattedDate}
 
 Suhu freezer : ${sales.suhuFreezer || '-'}°
@@ -1878,7 +2014,7 @@ Roti matang : ${sales.waste.rotiMatang || '-'} pcs
 
 ------------------------------------------
 
-*STOK INVENTORY TAROBUN GREEN PRAMUKA*
+*STOK INVENTORY TAROBUN ${escapeTelegramMarkdown(storeName || '-').toUpperCase()}*
 
 *Frozen Dough & Fillings* :
 Frozen Dough : ${inv.frozenDough || 0} pcs
@@ -1955,7 +2091,7 @@ Terima Kasih 🙏🏻`;
         const reportMessage = generateReportString(salesData, inventoryData);
         try {
           showToast('Mengirim ke Telegram... ✈️');
-          const response = await fetch(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
+          const response = await fetchWithRetry(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2054,7 +2190,7 @@ Terima Kasih 🙏🏻`;
 
       const generateKedatanganReportString = (form) => {
         const formattedDate = formatIndonesianDate(form.tanggal);
-        let text = `*Selamat Pagi Pak/Bu. Menginformasikan Green Pramuka Kedatangan Batang*\nTanggal: ${formattedDate}\n`;
+        let text = `*Selamat Pagi Pak/Bu. Menginformasikan ${escapeTelegramMarkdown(storeName || '-')} Kedatangan Barang*\nTanggal: ${formattedDate}\n`;
         if (form.noSuratJalan) {
           text += `No. Faktur/Surat Jalan: ${form.noSuratJalan}\n`;
         }
@@ -2146,7 +2282,7 @@ Daily inventory done✅
         const text = generateKedatanganReportString(form);
         try {
           showToast('Mengirim ke Telegram... ✈️');
-          const response = await fetch(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
+          const response = await fetchWithRetry(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ chat_id: config.telegramChatId, text, parse_mode: 'Markdown' })
@@ -2521,7 +2657,7 @@ Daily inventory done✅
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 30000);
         try {
-          const response = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+          const response = await fetchWithRetry(`https://api.telegram.org/bot${token}/sendPhoto`, {
             method: 'POST',
             body: formData,
             signal: controller.signal
@@ -2631,7 +2767,7 @@ Daily inventory done✅
 
           // Telegram caption foto dibatasi ~1024 karakter; jika kepanjangan, kirim teks rekap penuh terpisah
           if (caption.length > 1000) {
-            await fetch(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
+            await fetchWithRetry(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ chat_id: config.telegramChatId, text: caption, parse_mode: 'Markdown' })
@@ -2676,7 +2812,7 @@ Daily inventory done✅
           });
           text += `\nTerima Kasih 🙏🏻`;
 
-          const response = await fetch(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
+          const response = await fetchWithRetry(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2798,7 +2934,7 @@ Daily inventory done✅
         const token = (config.telegramBotToken || '').trim();
         const chatId = (config.telegramChatId || '').trim();
         if (fullCaption.length > 1000) {
-          await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          await fetchWithRetry(`https://api.telegram.org/bot${token}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ chat_id: chatId, text: fullCaption, parse_mode: 'Markdown' })
