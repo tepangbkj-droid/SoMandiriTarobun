@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
-  <title>Tarobun HUB</title>
+  <title>Tarobun SO Hub</title>
 
   <!-- Pengerasan keamanan dasar sisi browser (mitigasi injeksi script/clickjacking) -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.tailwindcss.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com; img-src 'self' data: blob: https:; font-src 'self' data: https://unpkg.com; connect-src 'self' https://*.firebaseio.com https://*.firebasedatabase.app wss://*.firebaseio.com wss://*.firebasedatabase.app https://*.googleapis.com https://unpkg.com https://api.telegram.org; frame-ancestors 'none'; base-uri 'self'; object-src 'none';">
@@ -230,6 +230,34 @@ const { useState, useEffect } = React;
         return { val: () => data };
       } catch (e) {
         return ref.once('value');
+      }
+    };
+
+    // Pengganti untuk .push(data) / .remove() — dipakai khusus di fitur CHAT, karena kirim/hapus
+    // pesan butuh terasa INSTAN, sedangkan .push()/.remove() dari SDK tetap lewat WebSocket yang
+    // sama-sama bisa lambat/diblokir jaringan seperti pembacaan data. Kalau REST gagal (mis. jaringan
+    // benar-benar putus total), otomatis fallback ke cara SDK biasa supaya tetap ada jalan keluar.
+    const restPush = async (ref, data) => {
+      try {
+        const url = await restUrlFor(ref);
+        const res = await fetchWithRetry(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        }, 1, 1200);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      } catch (e) {
+        return ref.push(data);
+      }
+    };
+    const restRemove = async (ref) => {
+      try {
+        const url = await restUrlFor(ref);
+        const res = await fetchWithRetry(url, { method: 'DELETE' }, 1, 1200);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+      } catch (e) {
+        return ref.remove();
       }
     };
 
@@ -566,7 +594,7 @@ const { useState, useEffect } = React;
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 sm:p-8">
             <div className="flex flex-col items-center mb-6">
               <div className="bg-purple-800 text-white w-14 h-14 rounded-2xl font-bold flex items-center justify-center text-xl tracking-wider mb-3">TB</div>
-              <h1 className="font-bold text-slate-800 text-lg">TAROBUN Hub</h1>
+              <h1 className="font-bold text-slate-800 text-lg">TAROBUN SO Hub</h1>
               <p className="text-xs text-slate-400 text-center mt-1">Masuk sebagai toko atau admin pusat</p>
             </div>
 
@@ -4736,7 +4764,7 @@ Daily inventory done✅
         if (!trimmed) return;
         setSending(true);
         try {
-          await db.ref(`chats/${storeId}/messages`).push({
+          await restPush(db.ref(`chats/${storeId}/messages`), {
             sender: senderRole, // 'admin' atau 'store'
             senderLabel,
             text: trimmed,
@@ -4755,7 +4783,7 @@ Daily inventory done✅
       const handleEndSession = async () => {
         setEnding(true);
         try {
-          await db.ref(`chats/${storeId}`).remove();
+          await restRemove(db.ref(`chats/${storeId}`));
           setConfirmEnd(false);
         } catch (err) {
           console.error(err);
