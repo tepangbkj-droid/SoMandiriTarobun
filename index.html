@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
-  <title>Tarobun Green Pramuka Hub</title>
+  <title>Tarobun HUB</title>
 
   <!-- Pengerasan keamanan dasar sisi browser (mitigasi injeksi script/clickjacking) -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.tailwindcss.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com; img-src 'self' data: blob: https:; font-src 'self' data: https://unpkg.com; connect-src 'self' https://*.firebaseio.com https://*.firebasedatabase.app wss://*.firebaseio.com wss://*.firebasedatabase.app https://*.googleapis.com https://unpkg.com https://api.telegram.org; frame-ancestors 'none'; base-uri 'self'; object-src 'none';">
@@ -149,8 +149,24 @@ const { useState, useEffect } = React;
     const clearSession = () => localStorage.removeItem(SESSION_KEY);
 
     // ==========================================
-    // FETCH DENGAN AUTO-RETRY (khusus dipakai untuk request ke Telegram)
+    // DEBOUNCE UNTUK lucide.createIcons()
     // ==========================================
+    // Sebelumnya beberapa halaman memanggil window.lucide.createIcons() di useEffect TANPA
+    // dependency array, artinya fungsi ini (yang men-scan SELURUH DOM untuk cari ikon) jalan
+    // ulang setiap kali ada render apa pun — termasuk tiap kali user mengetik satu huruf di form.
+    // Ini salah satu penyebab utama web terasa "berat" terutama saat mengisi form laporan yang
+    // panjang. Sekarang dikumpulkan dulu jadi satu panggilan per frame (requestAnimationFrame),
+    // bukan langsung tiap render, tanpa mengubah ikon yang tampil sama sekali.
+    let _lucideScheduled = false;
+    const scheduleLucideIcons = () => {
+      if (_lucideScheduled) return;
+      _lucideScheduled = true;
+      requestAnimationFrame(() => {
+        _lucideScheduled = false;
+        if (window.lucide) window.lucide.createIcons();
+      });
+    };
+
     // Kirim laporan ke Telegram sering "gagal terhubung" bukan karena Bot Token/Chat ID
     // salah, tapi karena koneksi HP sempat putus-nyambung sepersekian detik (pindah BTS,
     // WiFi<->data seluler, dsb). Sebelumnya sekali gagal langsung tampil toast error dan
@@ -164,6 +180,56 @@ const { useState, useEffect } = React;
           if (attempt === retries) throw err;
           await new Promise((resolve) => setTimeout(resolve, delayMs * (attempt + 1)));
         }
+      }
+    };
+
+    // ==========================================
+    // GANTI WEBSOCKET -> HTTPS BIASA UNTUK SEMUA PEMBACAAN DATA
+    // ==========================================
+    // db.ref(...).on('value', ...) dan .once('value') dari Firebase SDK memakai koneksi
+    // WebSocket (wss://) di belakang layar. Di sebagian jaringan seluler, WebSocket ke domain
+    // yang jarang dikenal suka diblokir/lambat, sehingga data "tidak muncul" atau web terasa
+    // berat menunggu koneksi itu. Dua helper generik di bawah ini dipakai di SELURUH aplikasi
+    // (form penjualan, inventory, riwayat, chat, dsb) supaya SETIAP pembacaan data mengambil
+    // data awal lewat HTTPS biasa (REST API bawaan Firebase, ".json") terlebih dulu — cepat &
+    // tahan blokir jaringan — baru setelah itu tetap nyambung listener realtime seperti biasa
+    // untuk update live selanjutnya. Tidak ada fitur live-update yang hilang, cuma tampilan
+    // awalnya jauh lebih cepat & tidak macet kalau WebSocket-nya lambat/diblokir.
+    const restUrlFor = async (ref) => {
+      const user = auth.currentUser;
+      const token = user ? await user.getIdToken() : null;
+      return ref.toString() + '.json' + (token ? ('?auth=' + token) : '');
+    };
+
+    // Pengganti: ref.on('value', handler) — handler dipanggil sekali lewat REST (instan),
+    // lalu terus menerima update realtime seperti biasa. Return function untuk unsubscribe.
+    const bindLiveValue = (ref, handler, errHandler) => {
+      let active = true;
+      (async () => {
+        try {
+          const url = await restUrlFor(ref);
+          const res = await fetchWithRetry(url, {}, 1, 1200);
+          if (!active || !res.ok) return;
+          const data = await res.json();
+          handler({ val: () => data });
+        } catch (e) { /* biarkan listener realtime di bawah yang menyusul */ }
+      })();
+      const liveHandler = (snap) => { if (active) handler(snap); };
+      if (errHandler) ref.on('value', liveHandler, errHandler);
+      else ref.on('value', liveHandler);
+      return () => { active = false; ref.off('value', liveHandler); };
+    };
+
+    // Pengganti: await ref.once('value') — coba REST dulu (cepat), fallback ke SDK kalau gagal.
+    const restOnce = async (ref) => {
+      try {
+        const url = await restUrlFor(ref);
+        const res = await fetchWithRetry(url, {}, 1, 1200);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        return { val: () => data };
+      } catch (e) {
+        return ref.once('value');
       }
     };
 
@@ -302,7 +368,7 @@ const { useState, useEffect } = React;
       const [adminPassword2, setAdminPassword2] = useState('');
 
       useEffect(() => {
-        if (window.lucide) window.lucide.createIcons();
+        scheduleLucideIcons();
       });
 
       // Ambil status admin & daftar toko. Diberi timeout + AUTO-RETRY (dengan jeda makin lama) +
@@ -439,8 +505,12 @@ const { useState, useEffect } = React;
           const email = storeIdToEmail(storeId);
           const cred = await auth.signInWithEmailAndPassword(email, token);
           clearLoginAttempts(key);
-          const infoSnap = await db.ref(`stores/${storeId}/info`).once('value');
-          const info = infoSnap.val();
+          // Pakai REST fetch (HTTPS biasa) + token ID, bukan db.ref().once('value') (WebSocket),
+          // supaya proses "Memproses..." tidak lama di jaringan yang membatasi WebSocket.
+          const idToken = await cred.user.getIdToken();
+          const restRoot = firebaseConfig.databaseURL.replace(/\/$/, '');
+          const infoRes = await fetchWithRetry(`${restRoot}/stores/${storeId}/info.json?auth=${idToken}`, {}, 1, 1200);
+          const info = await infoRes.json();
           if (!info || info.active === false) {
             await auth.signOut();
             setError('Akun toko ini sudah tidak aktif. Hubungi admin.');
@@ -496,7 +566,7 @@ const { useState, useEffect } = React;
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 sm:p-8">
             <div className="flex flex-col items-center mb-6">
               <div className="bg-purple-800 text-white w-14 h-14 rounded-2xl font-bold flex items-center justify-center text-xl tracking-wider mb-3">TB</div>
-              <h1 className="font-bold text-slate-800 text-lg">TAROBUN HUB SO</h1>
+              <h1 className="font-bold text-slate-800 text-lg">TAROBUN Hub</h1>
               <p className="text-xs text-slate-400 text-center mt-1">Masuk sebagai toko atau admin pusat</p>
             </div>
 
@@ -604,8 +674,7 @@ const { useState, useEffect } = React;
           const toList = (obj) => Object.keys(obj || {}).map(id => ({ id, ...obj[id] }));
           setFormSchemas({ sales: toList(data.sales), inventory: toList(data.inventory) });
         };
-        ref.on('value', handler);
-        return () => ref.off('value', handler);
+        return bindLiveValue(ref, handler);
       }, []);
 
       const handleAddFormField = async (e) => {
@@ -641,7 +710,7 @@ const { useState, useEffect } = React;
       useEffect(() => {
         const uid = auth.currentUser && auth.currentUser.uid;
         if (!uid) return;
-        db.ref(`admins/${uid}/onboardingSeen`).once('value').then(snap => {
+        restOnce(db.ref(`admins/${uid}/onboardingSeen`)).then(snap => {
           if (snap.val() === true) {
             localStorage.setItem('tarobun_onboarding_admin', '1');
             setShowOnboarding(false);
@@ -665,18 +734,15 @@ const { useState, useEffect } = React;
       };
 
       useEffect(() => {
-        if (window.lucide) window.lucide.createIcons();
+        scheduleLucideIcons();
       });
 
+      // Data toko: pakai helper bindLiveValue supaya tampilan awal instan lewat REST,
+      // lalu tetap live-update lewat listener realtime seperti biasa.
       useEffect(() => {
+        const toList = (data) => Object.keys(data || {}).map(id => ({ id, ...((data || {})[id].info || {}) })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
         const ref = db.ref('stores');
-        const handler = (snap) => {
-          const data = snap.val() || {};
-          const list = Object.keys(data).map(id => ({ id, ...(data[id].info || {}) })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-          setStores(list);
-        };
-        ref.on('value', handler);
-        return () => ref.off('value', handler);
+        return bindLiveValue(ref, (snap) => setStores(toList(snap.val())));
       }, []);
 
       // Live-update untuk modal detail toko. Sebelumnya pakai once('value') sehingga data (riwayat,
@@ -719,14 +785,14 @@ const { useState, useEffect } = React;
           setTelegramForm({ botToken: tg.botToken || '', chatId: tg.chatId || '' });
         };
 
-        historyRef.on('value', historyHandler);
-        wasteRef.on('value', wasteHandler);
-        tgRef.on('value', tgHandler);
+        const unbindHistory = bindLiveValue(historyRef, historyHandler);
+        const unbindWaste = bindLiveValue(wasteRef, wasteHandler);
+        const unbindTg = bindLiveValue(tgRef, tgHandler);
 
         return () => {
-          historyRef.off('value', historyHandler);
-          wasteRef.off('value', wasteHandler);
-          tgRef.off('value', tgHandler);
+          unbindHistory();
+          unbindWaste();
+          unbindTg();
         };
       }, [detailStore && detailStore.id]);
 
@@ -777,8 +843,7 @@ const { useState, useEffect } = React;
           setUnreadByStore(counts);
           adminChatInitRef.current = true;
         };
-        ref.on('value', handler);
-        return () => ref.off('value', handler);
+        return bindLiveValue(ref, handler);
       }, [stores]);
 
       const totalAdminUnread = Object.values(unreadByStore).reduce((a, b) => a + b, 0);
@@ -1339,7 +1404,7 @@ const { useState, useEffect } = React;
       // Sama seperti admin: cek juga penanda di Firebase agar onboarding tidak muncul lagi
       // kalau toko login dari HP/browser lain setelah pernah login sebelumnya.
       useEffect(() => {
-        db.ref(`${storeBase}/info/onboardingSeen`).once('value').then(snap => {
+        restOnce(db.ref(`${storeBase}/info/onboardingSeen`)).then(snap => {
           if (snap.val() === true) {
             localStorage.setItem(`tarobun_onboarding_store_${storeId}`, '1');
             setShowOnboarding(false);
@@ -1473,9 +1538,9 @@ useEffect(() => {
           const data = snap.val() || {};
           setCustomInventoryFields(Object.keys(data).map(id => ({ id, ...data[id] })));
         };
-        salesFieldsRef.on('value', salesHandler);
-        invFieldsRef.on('value', invHandler);
-        return () => { salesFieldsRef.off('value', salesHandler); invFieldsRef.off('value', invHandler); };
+        const unbindSales = bindLiveValue(salesFieldsRef, salesHandler);
+        const unbindInv = bindLiveValue(invFieldsRef, invHandler);
+        return () => { unbindSales(); unbindInv(); };
       }, []);
 
       // ==========================================
@@ -1616,7 +1681,7 @@ useEffect(() => {
       useEffect(() => {
         // 1. Tarik Data History secara Real-time dari Node 'history'
         const historyRef = db.ref(`${storeBase}/history`);
-        historyRef.on('value', (snapshot) => {
+        const unbindHistory = bindLiveValue(historyRef, (snapshot) => {
           const data = snapshot.val();
           if (data) {
             // Mengubah format Object Firebase { id1: data1, id2: data2 } menjadi Array sorted terbaru di atas
@@ -1649,14 +1714,14 @@ useEffect(() => {
         // 2b. Bot Token & Chat ID Telegram sekarang HANYA diatur oleh Admin (bukan lagi oleh toko).
         // Ambil real-time dari Firebase agar begitu admin mengubahnya, toko langsung dapat versi terbaru.
         const tgRef = db.ref(`${storeBase}/telegramConfig`);
-        tgRef.on('value', (snap) => {
+        const unbindTg = bindLiveValue(tgRef, (snap) => {
           const tg = snap.val() || {};
           setConfig(prev => ({ ...prev, telegramBotToken: tg.botToken || '', telegramChatId: tg.chatId || '' }));
         });
 
         // 3. Tarik Data Foto Waste/Rijek secara Real-time dari Node 'wasteFotos'
         const wasteFotoRef = db.ref(`${storeBase}/wasteFotos`);
-        wasteFotoRef.on('value', (snapshot) => {
+        const unbindWaste = bindLiveValue(wasteFotoRef, (snapshot) => {
           const data = snapshot.val();
           if (data) {
             const formattedList = Object.keys(data).map(key => ({
@@ -1671,7 +1736,7 @@ useEffect(() => {
 
         // 4. Tarik Data Kedatangan Barang secara Real-time dari Node 'kedatanganBarang'
         const kedatanganRef = db.ref(`${storeBase}/kedatanganBarang`);
-        kedatanganRef.on('value', (snapshot) => {
+        const unbindKedatangan = bindLiveValue(kedatanganRef, (snapshot) => {
           const data = snapshot.val();
           if (data) {
             const formattedList = Object.keys(data).map(key => ({
@@ -1686,7 +1751,7 @@ useEffect(() => {
 
         // 5. Tarik Data Laporan Suhu secara Real-time dari Node 'suhuReports'
         const suhuRef = db.ref(`${storeBase}/suhuReports`);
-        suhuRef.on('value', (snapshot) => {
+        const unbindSuhu = bindLiveValue(suhuRef, (snapshot) => {
           const data = snapshot.val();
           if (data) {
             const formattedList = Object.keys(data).map(key => ({
@@ -1701,11 +1766,11 @@ useEffect(() => {
 
         // Clean up listener saat component unmount
         return () => {
-          historyRef.off();
-          wasteFotoRef.off();
-          kedatanganRef.off();
-          suhuRef.off();
-          tgRef.off();
+          unbindHistory();
+          unbindTg();
+          unbindWaste();
+          unbindKedatangan();
+          unbindSuhu();
         };
       }, []);
 
@@ -1745,8 +1810,7 @@ useEffect(() => {
           if (newestMsg) lastSeenAdminMsgIdRef.current = newestMsg.id;
           chatInitializedRef.current = true;
         };
-        chatRef.on('value', handler);
-        return () => chatRef.off('value', handler);
+        return bindLiveValue(chatRef, handler);
       }, [storeId]);
 
       const numVal = (val) => {
@@ -4659,8 +4723,7 @@ Daily inventory done✅
           setMessages(list);
           localStorage.setItem(`tarobun_chat_lastread_${senderRole}_${storeId}`, Date.now().toString());
         };
-        ref.on('value', handler);
-        return () => ref.off('value', handler);
+        return bindLiveValue(ref, handler);
       }, [storeId]);
 
       useEffect(() => {
