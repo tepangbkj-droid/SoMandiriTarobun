@@ -534,6 +534,22 @@ const { useState, useEffect } = React;
         return () => window.removeEventListener('online', handleOnline);
       }, [dirError, adminCheckError]);
 
+      // Auto-refresh daftar toko & status admin setiap kali halaman login ini dibuka/dilihat lagi
+      // (misal: admin baru saja membuat cabang baru di tab lain, lalu pindah balik ke tab Login Toko).
+      // Sebelumnya data cuma diambil SEKALI saat halaman pertama dibuka, jadi cabang baru tidak
+      // muncul sampai di-refresh manual. Sekarang otomatis ambil data terbaru tiap tab ini aktif lagi.
+      useEffect(() => {
+        const handleVisible = () => {
+          if (document.visibilityState === 'visible') setReloadTick(t => t + 1);
+        };
+        document.addEventListener('visibilitychange', handleVisible);
+        window.addEventListener('focus', handleVisible);
+        return () => {
+          document.removeEventListener('visibilitychange', handleVisible);
+          window.removeEventListener('focus', handleVisible);
+        };
+      }, []);
+
       const attemptKeyFor = (id) => `login_${mode}_${id}`;
 
       const handleStoreLogin = async (e) => {
