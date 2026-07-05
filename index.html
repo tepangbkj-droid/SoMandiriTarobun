@@ -255,6 +255,30 @@ const { useState, useEffect } = React;
       }
     };
 
+    // Update BANYAK path sekaligus dalam SATU request (mis. buat toko baru butuh menulis 3 lokasi
+    // sekaligus: stores/{id}/info, storeUidMap/{uid}, storeDirectory/{id}). Sebelumnya ini dikirim
+    // sebagai 3 request terpisah — kalau salah satu gagal di tengah jalan (jaringan putus sesaat),
+    // data bisa "setengah tersimpan" (sebagian lokasi ada, sebagian tidak). Dengan multi-path update
+    // ini, updates = { "path/a": valueA, "path/b": valueB, ... } dikirim dalam 1 request PATCH ke root,
+    // jauh lebih kecil kemungkinan gagal di tengah.
+    const restMultiUpdate = async (updates) => {
+      try {
+        const user = auth.currentUser;
+        const token = user ? await user.getIdToken() : null;
+        const restRoot = firebaseConfig.databaseURL.replace(/\/$/, '');
+        const url = restRoot + '/.json' + (token ? ('?auth=' + token) : '');
+        const res = await fetchWithRetry(url, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updates),
+        }, 1, 1200);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      } catch (e) {
+        return db.ref('/').update(updates);
+      }
+    };
+
     const restPush = async (ref, data) => {
       try {
         const url = await restUrlFor(ref);
@@ -929,9 +953,11 @@ const { useState, useEffect } = React;
           const uid = cred.user.uid;
           await secondaryAuth.signOut();
 
-          await restSet(db.ref(`stores/${id}/info`), { name, uid, createdAt: Date.now(), active: true, token: tokenVal });
-          await restSet(db.ref(`storeUidMap/${uid}`), id);
-          await restSet(db.ref(`storeDirectory/${id}`), name);
+          await restMultiUpdate({
+            [`stores/${id}/info`]: { name, uid, createdAt: Date.now(), active: true, token: tokenVal },
+            [`storeUidMap/${uid}`]: id,
+            [`storeDirectory/${id}`]: name,
+          });
 
           setCreatedToken({ id, name, token: tokenVal });
           setNewStoreName('');
@@ -940,7 +966,7 @@ const { useState, useEffect } = React;
           setStores(prev => [{ id, name, uid, createdAt: Date.now(), active: true, token: tokenVal }, ...prev]);
         } catch (err) {
           console.error(err);
-          setErrorMsg('Gagal membuat toko. Pastikan Firebase Authentication (Email/Password) sudah diaktifkan di Firebase Console.');
+          setErrorMsg('Gagal membuat toko: ' + (err && err.message ? err.message : 'periksa koneksi internet Anda') + '. Silakan coba lagi — kalau ini muncul, toko BELUM tersimpan sama sekali (bukan setengah tersimpan).');
         } finally {
           setCreating(false);
         }
@@ -1000,14 +1026,18 @@ const { useState, useEffect } = React;
 
       const handleDeleteStore = async (store) => {
         try {
-          await restRemove(db.ref(`stores/${store.id}`));
-          await restRemove(db.ref(`storeDirectory/${store.id}`));
-          if (store.uid) await restRemove(db.ref(`storeUidMap/${store.uid}`));
+          const updates = {
+            [`stores/${store.id}`]: null,
+            [`storeDirectory/${store.id}`]: null,
+          };
+          if (store.uid) updates[`storeUidMap/${store.uid}`] = null;
+          await restMultiUpdate(updates);
           setConfirmDelete(null);
           setDetailStore(null);
           setStores(prev => prev.filter(s => s.id !== store.id));
         } catch (err) {
           console.error(err);
+          alert('Gagal menghapus toko: ' + (err && err.message ? err.message : 'periksa koneksi internet Anda'));
         }
       };
 
