@@ -1,8 +1,0 @@
-[{
-      "relation": ["delegate_permission/common.handle_all_urls"],
-      "target": {
-        "namespace": "android_app",
-        "package_name": "app.vercel.so_mandiri_tarobun_98bk.twa",
-        "sha256_cert_fingerprints": ["3C:B5:6A:CA:9E:60:84:8F:73:CE:D5:E1:7D:6E:18:E8:D3:28:3F:34:C8:04:56:E6:16:E1:37:73:A6:9C:1F:8B"]
-      }
-    }]
