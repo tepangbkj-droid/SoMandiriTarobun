@@ -3,7 +3,6 @@
       "target": {
         "namespace": "android_app",
         "package_name": "app.vercel.so_mandiri_tarobun_98bk.twa",
-        "sha256_cert_fingerprints": ["6E:0E:6E:9D:1B:86:D3:FC:07:02:C9:AA:FD:8A:95:7D:1A:E1:62:3B:77:86:C1:8B:91:72:0E:20:F0:2F:59:BB"]
+        "sha256_cert_fingerprints": ["DC:B1:93:17:B8:C3:E1:E8:E4:99:82:63:B5:C2:84:80:E1:87:7E:71:22:43:81:E7:A5:49:96:E1:D0:4C:31:84"]
       }
     }]
-
