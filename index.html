@@ -11,6 +11,9 @@
   <meta name="referrer" content="strict-origin-when-cross-origin">
 
  <!-- React core -->
+  <link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#6D28D9">
+ 
 <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 
@@ -4944,5 +4947,12 @@ Daily inventory done✅
 root.render(<AppRoot />);
 
   </script>
+  <script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW gagal:', err));
+    });
+  }
+</script>
 </body>
 </html>
