@@ -355,10 +355,31 @@ const { useState, useEffect } = React;
 
     // Tampilkan notifikasi native browser. Hanya muncul saat tab TIDAK sedang aktif dilihat
     // (saat tab aktif, cukup toast di dalam app supaya tidak dobel mengganggu).
-    const sendBrowserNotification = (title, body) => {
+    //
+    // PENTING: `new Notification(...)` langsung HANYA berjalan di sebagian browser desktop.
+    // Di Chrome Android (dan sebagian besar browser mobile modern) constructor ini akan gagal
+    // secara diam-diam (error "Illegal constructor") karena mobile Chrome MEWAJIBKAN notifikasi
+    // ditampilkan lewat Service Worker (registration.showNotification). Ini sebabnya sebelumnya
+    // notifikasi lancar di localhost desktop tapi hilang total saat dites di HP.
+    const sendBrowserNotification = async (title, body) => {
       if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
       if (document.visibilityState === 'visible') return;
       try {
+        if ('serviceWorker' in navigator) {
+          const reg = await navigator.serviceWorker.ready;
+          if (reg && reg.showNotification) {
+            await reg.showNotification(title, {
+              body,
+              tag: 'tarobun-chat',
+              renotify: true,
+              icon: '/icon-192.png',
+              badge: '/icon-192.png',
+              vibrate: [200, 100, 200]
+            });
+            return;
+          }
+        }
+        // Fallback untuk browser desktop lama yang masih mengizinkan constructor langsung
         const n = new Notification(title, { body, tag: 'tarobun-chat' });
         n.onclick = () => { window.focus(); n.close(); };
       } catch (err) {

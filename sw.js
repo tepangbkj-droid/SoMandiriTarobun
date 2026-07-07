@@ -1,39 +1,46 @@
-// Service worker sederhana - cukup untuk memenuhi syarat PWA
-// (tidak melakukan caching agresif supaya data Firebase tetap realtime)
+// Tarobun Service Worker
+// Fungsi utama: mengaktifkan reg.showNotification() (wajib dipakai di Chrome Android)
+// dan menangani klik pada notifikasi supaya membuka/fokus tab aplikasi.
 
-const CACHE_NAME = "tarobun-shell-v1";
-const APP_SHELL = ["/index.html"];
+const CACHE_NAME = 'tarobun-cache-v1';
 
-self.addEventListener("install", (event) => {
+self.addEventListener('install', (event) => {
+  // Langsung aktif tanpa menunggu tab lama ditutup, supaya notifikasi bisa
+  // langsung dipakai sejak kunjungan pertama tanpa perlu reload dua kali.
   self.skipWaiting();
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
-  );
 });
 
-self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
-      )
-    )
-  );
-  self.clients.claim();
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
 });
 
-// Network-first: selalu coba ambil versi terbaru dari server,
-// baru fallback ke cache kalau offline. Ini penting karena
-// aplikasi kamu pakai Firebase realtime, jangan sampai data basi ke-cache.
-self.addEventListener("fetch", (event) => {
-  if (event.request.method !== "GET") return;
-  event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        const clone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-        return response;
-      })
-      .catch(() => caches.match(event.request))
+// Jika suatu saat menambahkan Web Push (server-push, bukan hanya notifikasi lokal),
+// event 'push' ini yang akan menampilkan notifikasinya.
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+  let payload = {};
+  try { payload = event.data.json(); } catch (e) { payload = { title: 'Tarobun', body: event.data.text() }; }
+  const title = payload.title || 'Tarobun';
+  const options = {
+    body: payload.body || '',
+    tag: 'tarobun-chat',
+    renotify: true,
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    vibrate: [200, 100, 200]
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// Saat notifikasi diklik: fokus ke tab yang sudah terbuka, atau buka tab baru jika belum ada.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if ('focus' in client) return client.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow('/');
+    })
   );
 });
