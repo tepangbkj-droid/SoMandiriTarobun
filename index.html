@@ -889,6 +889,23 @@ const { useState, useEffect } = React;
       const [errorMsg, setErrorMsg] = useState('');
       const [adminToast, setAdminToast] = useState(null);
       const [unreadByStore, setUnreadByStore] = useState({});
+      const [chatListenerError, setChatListenerError] = useState(null);
+      // Status izin notifikasi browser, ditampilkan supaya admin tahu kalau notifikasi belum aktif
+      // (banyak browser DIAM-DIAM menolak permintaan izin otomatis kalau tidak dipicu klik langsung,
+      // jadi requestNotificationPermission() di useEffect saja kadang tidak cukup).
+      const [notifPermission, setNotifPermission] = useState(
+        typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
+      );
+      const handleEnableNotif = () => {
+        if (typeof Notification === 'undefined') return;
+        Notification.requestPermission().then((perm) => {
+          setNotifPermission(perm);
+          if (perm === 'granted') {
+            showAdminToast('🔔 Notifikasi browser diaktifkan');
+            playNotificationSound();
+          }
+        }).catch(() => {});
+      };
 
       const showAdminToast = (message) => {
         setAdminToast(message);
@@ -979,6 +996,15 @@ const { useState, useEffect } = React;
       useEffect(() => { tabRef.current = tab; }, [tab]);
       const adminChatInitRef = React.useRef(false);
       const adminLastSeenMsgRef = React.useRef({});
+      // Simpan daftar toko terbaru lewat ref (bukan langsung dipakai sebagai dependency listener
+      // di bawah). Sebelumnya listener chat ini dipasang ulang (unsubscribe lalu subscribe lagi ke
+      // Firebase) SETIAP KALI array "stores" berubah referensinya — termasuk saat data toko lain
+      // diperbarui tanpa ada hubungannya dengan chat. Ini yang membuat notifikasi terasa TIDAK
+      // real-time (koneksi sempat putus-sambung berkali-kali) dan kadang nama toko yang tampil di
+      // notifikasi belum ter-update. Dengan ref ini, listener chat cukup dipasang SATU KALI saja
+      // dan tetap menyala terus, tapi selalu memakai data nama toko yang paling baru.
+      const storesRef = React.useRef(stores);
+      useEffect(() => { storesRef.current = stores; }, [stores]);
       useEffect(() => {
         const ref = db.ref('chats');
         const handler = (snapshot) => {
@@ -993,7 +1019,7 @@ const { useState, useEffect } = React;
 
             const newestMsg = msgs[msgs.length - 1];
             if (adminChatInitRef.current && newestMsg && newestMsg.sender === 'store' && newestMsg.id !== adminLastSeenMsgRef.current[sid]) {
-              const storeName = (stores.find(s => s.id === sid) || {}).name || sid;
+              const storeName = (storesRef.current.find(s => s.id === sid) || {}).name || sid;
               const isViewingThisChat = tabRef.current === 'chat' && activeChatStoreRef.current && activeChatStoreRef.current.id === sid;
               if (!isViewingThisChat) {
                 showAdminToast(`💬 Pesan baru dari ${storeName}: "${newestMsg.text.slice(0, 60)}${newestMsg.text.length > 60 ? '…' : ''}"`);
@@ -1005,9 +1031,18 @@ const { useState, useEffect } = React;
           });
           setUnreadByStore(counts);
           adminChatInitRef.current = true;
+          setChatListenerError(null);
         };
-        return bindLiveValue(ref, handler);
-      }, [stores]);
+        // errHandler: kalau listener 'chats' gagal (mis. Firebase Rules memblokir baca node
+        // 'chats' secara keseluruhan), tampilkan pesan yang JELAS ke admin alih-alih gagal diam-diam.
+        // Sebelumnya kalau ini gagal, badge unread & notifikasi berhenti bekerja TANPA ada
+        // tanda apapun di layar, sehingga sulit disadari kalau chat baru tidak lagi terdeteksi.
+        const errHandler = (err) => {
+          console.error('Gagal memuat data chat untuk notifikasi admin:', err);
+          setChatListenerError('Gagal memuat notifikasi chat (kemungkinan izin akses Firebase). Coba refresh halaman.');
+        };
+        return bindLiveValue(ref, handler, errHandler);
+      }, []);
 
       const totalAdminUnread = Object.values(unreadByStore).reduce((a, b) => a + b, 0);
 
@@ -1153,9 +1188,16 @@ const { useState, useEffect } = React;
                   <p className="text-[10px] text-purple-200 truncate">Kelola seluruh cabang toko</p>
                 </div>
               </div>
-              <button onClick={onLogout} className="p-2 bg-white/10 hover:bg-rose-600 rounded-lg text-white transition-all shrink-0" title="Keluar">
-                <i data-lucide="log-out" className="w-5 h-5"></i>
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {notifPermission !== 'granted' && notifPermission !== 'unsupported' && (
+                  <button onClick={handleEnableNotif} className="p-2 bg-amber-500 hover:bg-amber-600 rounded-lg text-white transition-all" title="Aktifkan notifikasi browser">
+                    <i data-lucide="bell" className="w-5 h-5"></i>
+                  </button>
+                )}
+                <button onClick={onLogout} className="p-2 bg-white/10 hover:bg-rose-600 rounded-lg text-white transition-all" title="Keluar">
+                  <i data-lucide="log-out" className="w-5 h-5"></i>
+                </button>
+              </div>
             </div>
             <div className="max-w-5xl mx-auto flex gap-2 mt-3 overflow-x-auto">
               <button onClick={() => setTab('stores')} className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap ${tab === 'stores' ? 'bg-white text-indigo-900' : 'bg-white/10 text-white'}`}>Kelola Toko</button>
@@ -1168,6 +1210,14 @@ const { useState, useEffect } = React;
               </button>
             </div>
           </header>
+
+          {/* Banner error kalau listener notifikasi chat gagal (mis. Firebase Rules memblokir),
+              supaya admin SADAR notifikasi sedang tidak berfungsi, bukan diam-diam gagal terus. */}
+          {chatListenerError && (
+            <div className="bg-rose-600 text-white text-xs font-semibold px-4 py-2 text-center sticky top-[88px] z-20">
+              ⚠️ {chatListenerError}
+            </div>
+          )}
 
           {/* Toast notifikasi pesan chat baru dari toko */}
           {adminToast && (
