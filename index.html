@@ -798,6 +798,10 @@ const { useState, useEffect } = React;
       const [newFieldType, setNewFieldType] = useState('number');
       const [newFieldSection, setNewFieldSection] = useState('dough');
       const [savingField, setSavingField] = useState(false);
+      const [newFieldStoreIds, setNewFieldStoreIds] = useState([]);
+      const toggleNewFieldStore = (storeId) => {
+        setNewFieldStoreIds(prev => prev.includes(storeId) ? prev.filter(id => id !== storeId) : [...prev, storeId]);
+      };
 
       // Daftar bagian/section pada form SO Stok (Inventory) toko, supaya field tambahan yang
       // dibuat Admin bisa langsung ditaruh di bagian yang sesuai (bukan hanya numpuk di bawah).
@@ -808,6 +812,12 @@ const { useState, useEffect } = React;
         { value: 'lainnya', label: 'Lainnya (Data Tambahan)' },
       ];
       const getInventorySectionLabel = (value) => (INVENTORY_FORM_SECTIONS.find(s => s.value === value) || {}).label || 'Lainnya (Data Tambahan)';
+      // Label ringkas untuk menampilkan target toko sebuah field custom di daftar Form Builder.
+      const getFieldStoreLabel = (field) => {
+        if (!field.storeIds || field.storeIds.length === 0) return 'Semua Toko';
+        const names = field.storeIds.map(id => (stores.find(s => s.id === id) || {}).name || id);
+        return names.join(', ');
+      };
 
       useEffect(() => {
         const ref = db.ref('formSchemas');
@@ -827,11 +837,16 @@ const { useState, useEffect } = React;
         try {
           const fieldData = { label, unit: newFieldUnit.trim(), type: newFieldType };
           if (newFieldTarget === 'inventory') fieldData.section = newFieldSection;
+          // storeIds hanya disertakan kalau admin memilih toko tertentu. Kalau kosong (tidak
+          // dicentang satu pun / mode "Semua Toko"), properti ini TIDAK ditulis sama sekali
+          // supaya field otomatis berlaku ke semua toko (termasuk toko baru di masa depan).
+          if (newFieldStoreIds.length > 0) fieldData.storeIds = newFieldStoreIds;
           const result = await restPush(db.ref(`formSchemas/${newFieldTarget}`), fieldData);
           const newId = (result && result.name) ? result.name : ('local-' + Date.now());
           setFormSchemas(prev => ({ ...prev, [newFieldTarget]: [...(prev[newFieldTarget] || []), { id: newId, ...fieldData }] }));
           setNewFieldLabel('');
           setNewFieldUnit('');
+          setNewFieldStoreIds([]);
         } catch (err) {
           console.error(err);
         } finally {
@@ -1271,6 +1286,29 @@ const { useState, useEffect } = React;
                         </select>
                       </div>
                     )}
+                    <div className="sm:col-span-2">
+                      <label className="block text-[10px] font-semibold text-slate-600 mb-1">Berlaku untuk Toko Mana</label>
+                      <div className="flex flex-wrap gap-1.5 mb-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setNewFieldStoreIds([])}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${newFieldStoreIds.length === 0 ? 'bg-purple-800 text-white border-purple-800' : 'bg-white text-slate-600 border-slate-300'}`}
+                        >
+                          Semua Toko
+                        </button>
+                        {stores.map(s => (
+                          <button
+                            type="button"
+                            key={s.id}
+                            onClick={() => toggleNewFieldStore(s.id)}
+                            className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${newFieldStoreIds.includes(s.id) ? 'bg-purple-800 text-white border-purple-800' : 'bg-white text-slate-600 border-slate-300'}`}
+                          >
+                            {s.name}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-slate-400">Klik "Semua Toko" agar berlaku untuk semua, atau pilih satu/beberapa toko tertentu saja. Field ini juga akan otomatis ikut muncul di laporan Telegram sesuai toko yang dipilih.</p>
+                    </div>
                   </div>
                   <button type="submit" disabled={savingField} className="bg-purple-800 disabled:opacity-50 text-white text-xs font-bold px-4 py-2 rounded-lg">
                     {savingField ? 'Menambahkan...' : '+ Tambah Field'}
@@ -1286,8 +1324,11 @@ const { useState, useEffect } = React;
                       <div className="space-y-2">
                         {formSchemas.sales.map(f => (
                           <div key={f.id} className="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-2">
-                            <span className="text-xs font-semibold text-slate-700">{f.label}{f.unit ? ` (${f.unit})` : ''}</span>
-                            <button onClick={() => handleDeleteFormField('sales', f.id)} className="text-rose-500"><i data-lucide="trash-2" className="w-3.5 h-3.5"></i></button>
+                            <div className="min-w-0">
+                              <span className="text-xs font-semibold text-slate-700 block truncate">{f.label}{f.unit ? ` (${f.unit})` : ''}</span>
+                              <span className="text-[10px] text-purple-600 font-semibold">{getFieldStoreLabel(f)}</span>
+                            </div>
+                            <button onClick={() => handleDeleteFormField('sales', f.id)} className="text-rose-500 shrink-0"><i data-lucide="trash-2" className="w-3.5 h-3.5"></i></button>
                           </div>
                         ))}
                       </div>
@@ -1303,7 +1344,8 @@ const { useState, useEffect } = React;
                           <div key={f.id} className="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-2">
                             <div className="min-w-0">
                               <span className="text-xs font-semibold text-slate-700 block truncate">{f.label}{f.unit ? ` (${f.unit})` : ''}</span>
-                              <span className="text-[10px] text-indigo-600 font-semibold">{getInventorySectionLabel(f.section)}</span>
+                              <span className="text-[10px] text-indigo-600 font-semibold block">{getInventorySectionLabel(f.section)}</span>
+                              <span className="text-[10px] text-purple-600 font-semibold">{getFieldStoreLabel(f)}</span>
                             </div>
                             <button onClick={() => handleDeleteFormField('inventory', f.id)} className="text-rose-500 shrink-0"><i data-lucide="trash-2" className="w-3.5 h-3.5"></i></button>
                           </div>
@@ -1468,9 +1510,17 @@ const { useState, useEffect } = React;
                               </summary>
                               {h.inventory && (
                                 <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-1 text-[10px] text-slate-500">
-                                  {Object.entries(h.inventory).filter(([k, v]) => k !== 'tanggal' && v !== '').map(([k, v]) => (
+                                  {Object.entries(h.inventory).filter(([k, v]) => k !== 'tanggal' && v !== '' && v !== null && typeof v !== 'object').map(([k, v]) => (
                                     <div key={k} className="bg-slate-50 rounded px-2 py-1"><span className="font-semibold">{k}:</span> {v}</div>
                                   ))}
+                                  {/* Field tambahan (Form Builder) tersimpan sebagai objek di dalam "custom" —
+                                      dirender terpisah di sini (sebelumnya objek ini sempat coba dirender langsung
+                                      sebagai teks, yang menyebabkan aplikasi crash / layar putih). */}
+                                  {h.inventory.custom && typeof h.inventory.custom === 'object' && Object.entries(h.inventory.custom)
+                                    .filter(([, v]) => v !== '' && v !== null && v !== undefined && typeof v !== 'object')
+                                    .map(([k, v]) => (
+                                      <div key={'custom-' + k} className="bg-purple-50 rounded px-2 py-1"><span className="font-semibold">{k}:</span> {v}</div>
+                                    ))}
                                 </div>
                               )}
                             </details>
@@ -1705,13 +1755,16 @@ useEffect(() => {
       useEffect(() => {
         const salesFieldsRef = db.ref('formSchemas/sales');
         const invFieldsRef = db.ref('formSchemas/inventory');
+        // Field custom hanya ditampilkan di toko ini kalau tidak ada target toko sama sekali
+        // (berarti berlaku untuk semua toko / perilaku lama) ATAU toko ini ada di daftar target.
+        const belongsToThisStore = (field) => !field.storeIds || field.storeIds.length === 0 || field.storeIds.includes(storeId);
         const salesHandler = (snap) => {
           const data = snap.val() || {};
-          setCustomSalesFields(Object.keys(data).map(id => ({ id, ...data[id] })));
+          setCustomSalesFields(Object.keys(data).map(id => ({ id, ...data[id] })).filter(belongsToThisStore));
         };
         const invHandler = (snap) => {
           const data = snap.val() || {};
-          setCustomInventoryFields(Object.keys(data).map(id => ({ id, ...data[id] })));
+          setCustomInventoryFields(Object.keys(data).map(id => ({ id, ...data[id] })).filter(belongsToThisStore));
         };
         const unbindSales = bindLiveValue(salesFieldsRef, salesHandler);
         const unbindInv = bindLiveValue(invFieldsRef, invHandler);
@@ -2502,21 +2555,34 @@ Daily inventory done✅
         setIsSavingKedatangan(true);
         try {
           const now = Date.now();
+          // Bersihkan items: pastikan tidak ada nilai undefined yang bisa membuat proses
+          // simpan/tampilan berikutnya berperilaku tak terduga.
+          const safeItems = {};
+          Object.keys(kedatanganForm.items || {}).forEach((k) => {
+            const v = kedatanganForm.items[k];
+            if (v === undefined || v === null) return;
+            safeItems[k] = v;
+          });
           const payload = {
             id: now.toString(),
-            tanggal: kedatanganForm.tanggal,
+            tanggal: kedatanganForm.tanggal || new Date().toISOString().split('T')[0],
             noSuratJalan: kedatanganForm.noSuratJalan || '',
-            items: { ...kedatanganForm.items },
-            tidakSesuai: [...kedatanganForm.tidakSesuai],
+            items: safeItems,
+            tidakSesuai: Array.isArray(kedatanganForm.tidakSesuai) ? [...kedatanganForm.tidakSesuai] : [],
             createdAt: now
           };
           await restSet(db.ref(`${storeBase}/kedatanganBarang/` + now), payload);
           showToast('Data kedatangan barang tersimpan ke Riwayat! 📦✨');
-          setKedatanganHistoryList(prev => [...prev, { ...payload, firebaseKey: now.toString() }].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+          // Update optimis ke daftar riwayat lokal, cegah duplikat kalau listener realtime
+          // Firebase kebetulan sudah lebih dulu menerima data yang sama persis.
+          setKedatanganHistoryList(prev => {
+            const withoutDup = prev.filter(it => it.firebaseKey !== now.toString());
+            return [...withoutDup, { ...payload, firebaseKey: now.toString() }].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          });
           handleResetKedatanganForm();
         } catch (error) {
-          console.error(error);
-          showToast('Gagal menyimpan data. Cek koneksi internet.');
+          console.error('Gagal menyimpan data kedatangan barang:', error);
+          showToast('Gagal menyimpan data. Cek koneksi internet, lalu coba lagi.');
         } finally {
           setIsSavingKedatangan(false);
         }
@@ -5065,9 +5131,66 @@ Daily inventory done✅
       );
     }
 
+    // ==========================================
+    // ERROR BOUNDARY GLOBAL — MENCEGAH LAYAR PUTIH
+    // ==========================================
+    // Sebelumnya, jika terjadi error tak terduga di mana pun dalam aplikasi (misalnya saat
+    // menyimpan data lalu me-render ulang Riwayat), React akan "meruntuhkan" seluruh halaman
+    // dan layar menjadi putih kosong tanpa keterangan apa pun — pengguna harus refresh manual
+    // dan kadang khawatir datanya hilang. ErrorBoundary ini menangkap error tersebut, MENCEGAH
+    // layar putih, dan menampilkan pesan yang jelas + tombol "Muat Ulang". Data yang sudah
+    // tersimpan ke Cloud (Firebase) TIDAK hilang walau tampilan sempat error, karena proses
+    // simpan data terjadi sebelum render ulang tampilan.
+    class AppErrorBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { hasError: false, errorInfo: '' };
+      }
+      static getDerivedStateFromError(error) {
+        return { hasError: true, errorInfo: (error && error.message) ? error.message : String(error) };
+      }
+      componentDidCatch(error, info) {
+        console.error('Tarobun App Error (ditangkap ErrorBoundary):', error, info);
+      }
+      handleReload = () => {
+        this.setState({ hasError: false, errorInfo: '' });
+        window.location.reload();
+      };
+      render() {
+        if (this.state.hasError) {
+          return (
+            <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 max-w-sm w-full text-center space-y-3">
+                <div className="w-14 h-14 rounded-full bg-rose-50 flex items-center justify-center mx-auto">
+                  <i data-lucide="alert-triangle" className="w-7 h-7 text-rose-500"></i>
+                </div>
+                <h2 className="font-bold text-slate-800 text-lg">Ups, terjadi kendala tampilan</h2>
+                <p className="text-xs text-slate-500">
+                  Jangan khawatir, data yang sudah tersimpan ke Cloud tetap aman. Silakan muat ulang halaman untuk melanjutkan.
+                </p>
+                <button
+                  onClick={this.handleReload}
+                  className="w-full bg-purple-800 hover:bg-purple-900 text-white font-bold py-2.5 rounded-xl text-sm"
+                >
+                  Muat Ulang Halaman
+                </button>
+              </div>
+            </div>
+          );
+        }
+        return this.props.children;
+      }
+    }
+
+    // Tangkap juga error async (Promise) yang tidak ter-handle supaya tidak diam-diam
+    // membuat sebagian fitur berhenti bekerja tanpa keterangan ke pengguna.
+    window.addEventListener('unhandledrejection', (event) => {
+      console.error('Tarobun App - Promise ditolak tanpa ditangani:', event.reason);
+    });
+
     // Render AppRoot (menangani login admin/toko, sesi, dan routing)
     const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(<AppRoot />);
+root.render(<AppErrorBoundary><AppRoot /></AppErrorBoundary>);
 
   </script>
   <script>
