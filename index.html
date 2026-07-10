@@ -422,10 +422,25 @@ const { useState, useEffect } = React;
       video.onerror = () => { cleanup(); reject(new Error('Gagal memuat video. Pastikan formatnya didukung (mis. MP4).')); };
     });
 
-    // Upload satu file (foto/video) SOP ke Firebase Storage pada path sopMedia/{catId}/...
-    // Mengembalikan { type, url, name, size }. Foto & video sama-sama dikompres dulu supaya ringan;
-    // kalau kompresi video tidak didukung/gagal, video asli tetap diupload (asal masih di bawah batas ukuran).
-    const MAX_SOP_VIDEO_MB = 40;
+    // Upload satu file (foto/video) SOP — DISIMPAN LANGSUNG DI REALTIME DATABASE (GRATIS,
+    // tidak butuh Firebase Storage sama sekali, jadi tidak ada lagi masalah CORS/Storage
+    // Rules/Blaze). Foto & video dikompres dulu di browser, lalu diubah jadi teks base64 dan
+    // disimpan sebagai field `url` (data URI) langsung di node sopCategories/{catId}/media/{id}.
+    // Karena Realtime Database punya batas ±10MB per nilai teks, ukuran hasil kompresi dijaga
+    // jauh di bawah itu supaya aman.
+    const MAX_SOP_VIDEO_MB = 40; // batas ukuran file ASLI sebelum diproses (supaya browser tak berat)
+    const MAX_SOP_IMAGE_STORED_MB = 1.2; // batas ukuran FOTO setelah dikompres
+    const MAX_SOP_VIDEO_STORED_MB = 6; // batas ukuran VIDEO setelah dikompres (base64-nya ~8MB, masih aman)
+
+    // Ubah Blob hasil kompresi menjadi data URI base64 (mis. "data:image/jpeg;base64,...")
+    // supaya bisa langsung dipakai sebagai `src` di <img>/<video> tanpa perlu URL eksternal.
+    const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('Gagal membaca hasil kompresi file.'));
+      reader.readAsDataURL(blob);
+    });
+
     const uploadSopMediaFile = async (catId, file) => {
       const isImage = file.type.startsWith('image/');
       const isVideo = file.type.startsWith('video/');
@@ -434,58 +449,43 @@ const { useState, useEffect } = React;
         throw new Error(`Ukuran video maksimal ${MAX_SOP_VIDEO_MB}MB.`);
       }
       let blob = file;
-      let ext = 'jpg';
       let contentType = 'image/jpeg';
       if (isImage) {
-        blob = await compressSopImageFile(file);
-        ext = 'jpg';
+        // Kompres bertahap: kalau hasil kompresi pertama masih kegedean, coba lagi lebih agresif.
+        blob = await compressSopImageFile(file, 1000, 0.7);
+        if (blob.size > MAX_SOP_IMAGE_STORED_MB * 1024 * 1024) {
+          blob = await compressSopImageFile(file, 700, 0.55);
+        }
+        if (blob.size > MAX_SOP_IMAGE_STORED_MB * 1024 * 1024) {
+          throw new Error('Foto masih terlalu besar setelah dikompres. Coba pilih foto lain atau perkecil dulu.');
+        }
         contentType = 'image/jpeg';
       } else {
         contentType = file.type;
-        ext = file.name.includes('.') ? file.name.split('.').pop() : 'mp4';
         if (isVideoCompressionSupported()) {
           try {
             const compressed = await compressSopVideoFile(file);
             // Hanya pakai hasil kompresi kalau memang lebih kecil dari aslinya.
             if (compressed && compressed.size > 0 && compressed.size < file.size) {
               blob = compressed;
-              ext = 'webm';
               contentType = 'video/webm';
             }
           } catch (e) {
-            console.warn('Kompresi video gagal, upload video asli:', e);
+            console.warn('Kompresi video gagal, coba pakai video asli:', e);
           }
         }
+        if (blob.size > MAX_SOP_VIDEO_STORED_MB * 1024 * 1024) {
+          throw new Error(`Video masih ${(blob.size / 1024 / 1024).toFixed(1)}MB setelah dikompres (maks ${MAX_SOP_VIDEO_STORED_MB}MB). Coba rekam video lebih pendek atau resolusi lebih rendah.`);
+        }
       }
-      const path = `sopMedia/${catId}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
-      const ref = storage.ref(path);
-      try {
-        await ref.put(blob, { contentType });
-      } catch (err) {
-        // Perjelas pesan error paling umum: rules Storage belum di-deploy / belum login.
-        if (err && err.code === 'storage/unauthorized') {
-          throw new Error('Ditolak oleh Firebase Storage Rules (storage/unauthorized). Pastikan Storage Rules untuk path sopMedia/ sudah dideploy dan Anda sudah login.');
-        }
-        if (err && err.code === 'storage/unauthenticated') {
-          throw new Error('Sesi login sudah habis. Silakan login ulang lalu coba upload lagi.');
-        }
-        if (err && err.code === 'storage/unknown' && typeof navigator !== 'undefined' && navigator.onLine === false) {
-          throw new Error('Tidak ada koneksi internet.');
-        }
-        throw err;
-      }
-      const url = await ref.getDownloadURL();
-      return { type: isImage ? 'image' : 'video', url, path, name: file.name, size: blob.size || file.size };
+      const url = await blobToDataUrl(blob);
+      return { type: isImage ? 'image' : 'video', url, name: file.name, size: blob.size, contentType };
     };
 
-    const deleteSopMediaFile = async (path) => {
-      if (!path) return;
-      try {
-        await storage.ref(path).delete();
-      } catch (e) {
-        console.error('Gagal menghapus file di Storage:', e);
-      }
-    };
+    // Tidak ada lagi file eksternal di Storage yang perlu dihapus — foto/video tersimpan
+    // sebagai data langsung di dalam node media itu sendiri, jadi otomatis ikut terhapus
+    // begitu node sopCategories/{catId}/media/{mediaId} dihapus dari database.
+    const deleteSopMediaFile = async () => {};
 
     // ==========================================
     // AUTO-HAPUS DATA LAMA (>30 HARI) & NOTIFIKASI BROWSER
