@@ -6,7 +6,7 @@
   <title>Tarobun Green Pramuka Hub</title>
 
   <!-- Pengerasan keamanan dasar sisi browser (mitigasi injeksi script/clickjacking) -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.tailwindcss.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com; img-src 'self' data: blob: https:; font-src 'self' data: https://unpkg.com; connect-src 'self' https://*.firebaseio.com https://*.firebasedatabase.app wss://*.firebaseio.com wss://*.firebasedatabase.app https://*.googleapis.com https://unpkg.com https://api.telegram.org; frame-ancestors 'none'; base-uri 'self'; object-src 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.tailwindcss.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https://unpkg.com; connect-src 'self' https://*.firebaseio.com https://*.firebasedatabase.app wss://*.firebaseio.com wss://*.firebasedatabase.app https://*.googleapis.com https://unpkg.com https://api.telegram.org; frame-ancestors 'none'; base-uri 'self'; object-src 'none';">
   <meta http-equiv="X-Content-Type-Options" content="nosniff">
   <meta name="referrer" content="strict-origin-when-cross-origin">
 
@@ -27,6 +27,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-storage-compat.js"></script>
 
 <!-- Lucide -->
 <script src="https://unpkg.com/lucide@latest"></script>
@@ -74,6 +75,7 @@ const { useState, useEffect } = React;
     }
     const db = firebase.database();
     const auth = firebase.auth();
+    const storage = firebase.storage();
     auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(() => {});
 
     // App kedua khusus untuk ADMIN membuat akun toko baru tanpa mengganti sesi login admin
@@ -313,6 +315,175 @@ const { useState, useEffect } = React;
         if (!res.ok) throw new Error('HTTP ' + res.status);
       } catch (e) {
         return ref.remove();
+      }
+    };
+
+    // ==========================================
+    // PANDUAN SOP - HELPER UPLOAD FOTO/VIDEO
+    // ==========================================
+    // Kompres foto (resize + JPEG quality) sebelum diupload ke Firebase Storage, supaya
+    // ringan & hemat kuota.
+    const compressSopImageFile = (file, maxWidth = 1000, quality = 0.7) => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          let { width, height } = img;
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, width, height);
+          ctx.drawImage(img, 0, 0, width, height);
+          canvas.toBlob((blob) => {
+            if (!blob) { reject(new Error('Gagal mengompres gambar.')); return; }
+            resolve(blob);
+          }, 'image/jpeg', quality);
+        };
+        img.onerror = () => reject(new Error('Gagal memuat gambar. Pastikan formatnya JPG/PNG.'));
+        img.src = reader.result;
+      };
+      reader.onerror = () => reject(new Error('Gagal membaca file.'));
+      reader.readAsDataURL(file);
+    });
+
+    // Kompres video: perkecil resolusi & bitrate dengan menggambar ulang frame ke <canvas>
+    // lalu merekamnya sebagai WebM (VP9/VP8) via MediaRecorder. Kalau browser tidak
+    // mendukung (mis. beberapa versi Safari lama), fallback: upload video asli apa adanya.
+    const isVideoCompressionSupported = () => {
+      try {
+        return typeof MediaRecorder !== 'undefined'
+          && typeof HTMLCanvasElement.prototype.captureStream === 'function'
+          && (MediaRecorder.isTypeSupported('video/webm;codecs=vp9') || MediaRecorder.isTypeSupported('video/webm;codecs=vp8') || MediaRecorder.isTypeSupported('video/webm'));
+      } catch (e) {
+        return false;
+      }
+    };
+
+    const compressSopVideoFile = (file, maxWidth = 854, videoBitsPerSecond = 1500000) => new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const video = document.createElement('video');
+      video.muted = true;
+      video.playsInline = true;
+      video.preload = 'auto';
+      video.src = url;
+
+      const cleanup = () => URL.revokeObjectURL(url);
+
+      video.onloadedmetadata = () => {
+        let { videoWidth: width, videoHeight: height } = video;
+        if (!width || !height) { cleanup(); reject(new Error('Video tidak valid.')); return; }
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        const stream = canvas.captureStream(30);
+        const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+          ? 'video/webm;codecs=vp9'
+          : (MediaRecorder.isTypeSupported('video/webm;codecs=vp8') ? 'video/webm;codecs=vp8' : 'video/webm');
+        let recorder;
+        try {
+          recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond });
+        } catch (e) {
+          cleanup();
+          reject(e);
+          return;
+        }
+        const chunks = [];
+        let rafId = null;
+        recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+        recorder.onstop = () => {
+          cleanup();
+          if (rafId) cancelAnimationFrame(rafId);
+          if (chunks.length === 0) { reject(new Error('Hasil kompresi video kosong.')); return; }
+          resolve(new Blob(chunks, { type: mimeType }));
+        };
+        recorder.onerror = (e) => { cleanup(); if (rafId) cancelAnimationFrame(rafId); reject((e && e.error) || new Error('Gagal mengompres video.')); };
+
+        const drawFrame = () => {
+          if (video.paused || video.ended) return;
+          ctx.drawImage(video, 0, 0, width, height);
+          rafId = requestAnimationFrame(drawFrame);
+        };
+        video.onplay = () => { recorder.start(250); drawFrame(); };
+        video.onended = () => { if (recorder.state !== 'inactive') recorder.stop(); };
+        video.onerror = () => { cleanup(); reject(new Error('Gagal memuat video untuk dikompres.')); };
+        video.play().catch((err) => { cleanup(); reject(err); });
+      };
+      video.onerror = () => { cleanup(); reject(new Error('Gagal memuat video. Pastikan formatnya didukung (mis. MP4).')); };
+    });
+
+    // Upload satu file (foto/video) SOP ke Firebase Storage pada path sopMedia/{catId}/...
+    // Mengembalikan { type, url, name, size }. Foto & video sama-sama dikompres dulu supaya ringan;
+    // kalau kompresi video tidak didukung/gagal, video asli tetap diupload (asal masih di bawah batas ukuran).
+    const MAX_SOP_VIDEO_MB = 40;
+    const uploadSopMediaFile = async (catId, file) => {
+      const isImage = file.type.startsWith('image/');
+      const isVideo = file.type.startsWith('video/');
+      if (!isImage && !isVideo) throw new Error('File harus berupa foto atau video.');
+      if (isVideo && file.size > MAX_SOP_VIDEO_MB * 1024 * 1024) {
+        throw new Error(`Ukuran video maksimal ${MAX_SOP_VIDEO_MB}MB.`);
+      }
+      let blob = file;
+      let ext = 'jpg';
+      let contentType = 'image/jpeg';
+      if (isImage) {
+        blob = await compressSopImageFile(file);
+        ext = 'jpg';
+        contentType = 'image/jpeg';
+      } else {
+        contentType = file.type;
+        ext = file.name.includes('.') ? file.name.split('.').pop() : 'mp4';
+        if (isVideoCompressionSupported()) {
+          try {
+            const compressed = await compressSopVideoFile(file);
+            // Hanya pakai hasil kompresi kalau memang lebih kecil dari aslinya.
+            if (compressed && compressed.size > 0 && compressed.size < file.size) {
+              blob = compressed;
+              ext = 'webm';
+              contentType = 'video/webm';
+            }
+          } catch (e) {
+            console.warn('Kompresi video gagal, upload video asli:', e);
+          }
+        }
+      }
+      const path = `sopMedia/${catId}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+      const ref = storage.ref(path);
+      try {
+        await ref.put(blob, { contentType });
+      } catch (err) {
+        // Perjelas pesan error paling umum: rules Storage belum di-deploy / belum login.
+        if (err && err.code === 'storage/unauthorized') {
+          throw new Error('Ditolak oleh Firebase Storage Rules (storage/unauthorized). Pastikan Storage Rules untuk path sopMedia/ sudah dideploy dan Anda sudah login.');
+        }
+        if (err && err.code === 'storage/unauthenticated') {
+          throw new Error('Sesi login sudah habis. Silakan login ulang lalu coba upload lagi.');
+        }
+        if (err && err.code === 'storage/unknown' && typeof navigator !== 'undefined' && navigator.onLine === false) {
+          throw new Error('Tidak ada koneksi internet.');
+        }
+        throw err;
+      }
+      const url = await ref.getDownloadURL();
+      return { type: isImage ? 'image' : 'video', url, path, name: file.name, size: blob.size || file.size };
+    };
+
+    const deleteSopMediaFile = async (path) => {
+      if (!path) return;
+      try {
+        await storage.ref(path).delete();
+      } catch (e) {
+        console.error('Gagal menghapus file di Storage:', e);
       }
     };
 
@@ -799,6 +970,7 @@ const { useState, useEffect } = React;
     // ==========================================
     function AdminPanel({ onLogout }) {
       const [tab, setTab] = useState('stores');
+      const [showMenu, setShowMenu] = useState(false);
       const [stores, setStores] = useState([]);
       const [showAdd, setShowAdd] = useState(false);
       const [newStoreName, setNewStoreName] = useState('');
@@ -822,6 +994,167 @@ const { useState, useEffect } = React;
       const [newFieldStoreIds, setNewFieldStoreIds] = useState([]);
       const toggleNewFieldStore = (storeId) => {
         setNewFieldStoreIds(prev => prev.includes(storeId) ? prev.filter(id => id !== storeId) : [...prev, storeId]);
+      };
+
+      // ==========================================
+      // UPDATE WEB -> BROADCAST KE BOT TELEGRAM TOKO (STATE)
+      // ==========================================
+      const [webUpdateText, setWebUpdateText] = useState('');
+      const [webUpdateAll, setWebUpdateAll] = useState(true);
+      const [webUpdateStoreIds, setWebUpdateStoreIds] = useState([]);
+      const [sendingWebUpdate, setSendingWebUpdate] = useState(false);
+      const [webUpdateReport, setWebUpdateReport] = useState(null); // { success: [], failed: [] }
+      const toggleWebUpdateStore = (storeId) => {
+        setWebUpdateStoreIds(prev => prev.includes(storeId) ? prev.filter(id => id !== storeId) : [...prev, storeId]);
+      };
+
+      // ==========================================
+      // PENGHAPUSAN LAPORAN >=7 HARI (STATE)
+      // ==========================================
+      const [confirmDeleteOldReports, setConfirmDeleteOldReports] = useState(false);
+      const [deletingOldReports, setDeletingOldReports] = useState(false);
+
+      // ==========================================
+      // PANDUAN SOP - STATE & LOGIKA (Sisi Admin)
+      // ==========================================
+      const [sopCategories, setSopCategories] = useState([]);
+      const [newSopName, setNewSopName] = useState('');
+      const [newSopContent, setNewSopContent] = useState('');
+      const [newSopStoreIds, setNewSopStoreIds] = useState([]);
+      const [newSopFiles, setNewSopFiles] = useState([]); // File[] dipilih sebelum kategori disimpan
+      const [savingSop, setSavingSop] = useState(false);
+      const [editingSopId, setEditingSopId] = useState(null);
+      const [editSopDraft, setEditSopDraft] = useState(null);
+      const [uploadingSopMedia, setUploadingSopMedia] = useState(null); // catId sedang upload
+      const [confirmDeleteSop, setConfirmDeleteSop] = useState(null);
+
+      const toggleNewSopStore = (storeId) => {
+        setNewSopStoreIds(prev => prev.includes(storeId) ? prev.filter(id => id !== storeId) : [...prev, storeId]);
+      };
+      const toggleEditSopStore = (storeId) => {
+        setEditSopDraft(prev => {
+          const cur = prev.storeIds || [];
+          const next = cur.includes(storeId) ? cur.filter(id => id !== storeId) : [...cur, storeId];
+          return { ...prev, storeIds: next };
+        });
+      };
+      const getSopStoreLabel = (cat) => {
+        if (!cat.storeIds || cat.storeIds.length === 0) return 'Semua Toko';
+        const names = cat.storeIds.map(id => (stores.find(s => s.id === id) || {}).name || id);
+        return names.join(', ');
+      };
+
+      useEffect(() => {
+        const ref = db.ref('sopCategories');
+        const handler = (snap) => {
+          const data = snap.val() || {};
+          const list = Object.keys(data).map(id => {
+            const c = data[id] || {};
+            const media = c.media ? Object.keys(c.media).map(mid => ({ id: mid, ...c.media[mid] })) : [];
+            media.sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0));
+            return { id, name: c.name || '(Tanpa Nama)', content: c.content || '', storeIds: c.storeIds || [], media, createdAt: c.createdAt || 0 };
+          });
+          list.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+          setSopCategories(list);
+        };
+        return bindLiveValue(ref, handler);
+      }, []);
+
+      const handleAddSopCategory = async (e) => {
+        e.preventDefault();
+        const name = newSopName.trim();
+        if (!name) return;
+        setSavingSop(true);
+        try {
+          const payload = { name, content: newSopContent.trim(), createdAt: Date.now() };
+          if (newSopStoreIds.length > 0) payload.storeIds = newSopStoreIds;
+          const result = await restPush(db.ref('sopCategories'), payload);
+          const newId = (result && result.name) ? result.name : ('local-' + Date.now());
+          setSopCategories(prev => [...prev, { id: newId, ...payload, storeIds: payload.storeIds || [], media: [] }]);
+          const filesToUpload = newSopFiles;
+          setNewSopName('');
+          setNewSopContent('');
+          setNewSopStoreIds([]);
+          setNewSopFiles([]);
+          if (filesToUpload.length > 0) {
+            await handleUploadSopMedia(newId, filesToUpload);
+          }
+        } catch (err) {
+          console.error(err);
+          alert('Gagal menambah kategori SOP: periksa koneksi internet Anda.');
+        } finally {
+          setSavingSop(false);
+        }
+      };
+
+      const startEditSop = (cat) => {
+        setEditingSopId(cat.id);
+        setEditSopDraft({ name: cat.name, content: cat.content, storeIds: cat.storeIds || [] });
+      };
+      const cancelEditSop = () => { setEditingSopId(null); setEditSopDraft(null); };
+
+      const handleSaveEditSop = async (catId) => {
+        if (!editSopDraft) return;
+        setSavingSop(true);
+        try {
+          const updates = {
+            [`sopCategories/${catId}/name`]: editSopDraft.name.trim(),
+            [`sopCategories/${catId}/content`]: editSopDraft.content.trim(),
+            [`sopCategories/${catId}/storeIds`]: editSopDraft.storeIds.length > 0 ? editSopDraft.storeIds : null,
+          };
+          await restMultiUpdate(updates);
+          setSopCategories(prev => prev.map(c => c.id === catId ? { ...c, name: editSopDraft.name.trim(), content: editSopDraft.content.trim(), storeIds: editSopDraft.storeIds } : c));
+          cancelEditSop();
+        } catch (err) {
+          console.error(err);
+          alert('Gagal menyimpan perubahan SOP: periksa koneksi internet Anda.');
+        } finally {
+          setSavingSop(false);
+        }
+      };
+
+      const handleDeleteSopCategory = async (cat) => {
+        try {
+          await Promise.all((cat.media || []).map(m => deleteSopMediaFile(m.path)));
+          await restRemove(db.ref(`sopCategories/${cat.id}`));
+          setSopCategories(prev => prev.filter(c => c.id !== cat.id));
+          setConfirmDeleteSop(null);
+        } catch (err) {
+          console.error(err);
+          alert('Gagal menghapus kategori SOP: periksa koneksi internet Anda.');
+        }
+      };
+
+      const handleUploadSopMedia = async (catId, fileList) => {
+        const files = Array.from(fileList || []);
+        if (files.length === 0) return;
+        setUploadingSopMedia(catId);
+        try {
+          for (const file of files) {
+            try {
+              const uploaded = await uploadSopMediaFile(catId, file);
+              const result = await restPush(db.ref(`sopCategories/${catId}/media`), { ...uploaded, addedAt: Date.now() });
+              const mediaId = (result && result.name) ? result.name : ('local-' + Date.now());
+              setSopCategories(prev => prev.map(c => c.id === catId ? { ...c, media: [...c.media, { id: mediaId, ...uploaded, addedAt: Date.now() }] } : c));
+            } catch (fileErr) {
+              console.error(fileErr);
+              alert(`Gagal upload "${file.name}": ${fileErr.message || 'periksa koneksi internet Anda'}`);
+            }
+          }
+        } finally {
+          setUploadingSopMedia(null);
+        }
+      };
+
+      const handleDeleteSopMedia = async (catId, media) => {
+        try {
+          await restRemove(db.ref(`sopCategories/${catId}/media/${media.id}`));
+          setSopCategories(prev => prev.map(c => c.id === catId ? { ...c, media: c.media.filter(m => m.id !== media.id) } : c));
+          deleteSopMediaFile(media.path);
+        } catch (err) {
+          console.error(err);
+          alert('Gagal menghapus file: periksa koneksi internet Anda.');
+        }
       };
 
       // Daftar bagian/section pada form SO Stok (Inventory) toko, supaya field tambahan yang
@@ -970,7 +1303,7 @@ const { useState, useEffect } = React;
         };
         const historyHandler = (snap) => {
           const data = snap.val() || {};
-          historyList = Object.values(data).sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''));
+          historyList = Object.keys(data).map(key => ({ id: key, ...data[key] })).sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''));
           gotHistory = true;
           pushUpdate();
         };
@@ -1129,6 +1462,109 @@ const { useState, useEffect } = React;
         }
       };
 
+      // Escape karakter spesial Telegram Markdown (legacy) khusus untuk pesan broadcast Update Web.
+      const escapeMdWebUpdate = (text) => String(text === null || text === undefined ? '' : text).replace(/([_*`\[])/g, '\\$1');
+
+      // ==========================================
+      // FITUR: BROADCAST UPDATE WEB -> BOT TELEGRAM TOKO
+      // ==========================================
+      // Admin mengetik satu pesan, memilih toko tujuan (semua atau beberapa saja), lalu setiap
+      // toko terpilih menerima pesan tersebut lewat Bot Telegram masing-masing (Bot Token & Chat ID
+      // yang sudah diatur admin di menu Kelola Toko). Bot Token/Chat ID diambil langsung dari Cloud
+      // saat pengiriman (bukan dari state lokal), supaya selalu memakai integrasi Telegram terbaru.
+      const handleSendWebUpdate = async () => {
+        const message = webUpdateText.trim();
+        if (!message) return;
+        const targets = webUpdateAll ? stores : stores.filter(s => webUpdateStoreIds.includes(s.id));
+        if (targets.length === 0) {
+          showAdminToast('⚠️ Pilih minimal satu toko tujuan.');
+          return;
+        }
+        setSendingWebUpdate(true);
+        setWebUpdateReport(null);
+        const success = [];
+        const failed = [];
+        for (const store of targets) {
+          try {
+            const snap = await restOnce(db.ref(`stores/${store.id}/telegramConfig`));
+            const tg = snap.val() || {};
+            const token = (tg.botToken || '').trim();
+            const chatId = (tg.chatId || '').trim();
+            if (!token || !chatId) {
+              failed.push(`${store.name} (Bot Telegram belum diatur)`);
+              continue;
+            }
+            const text = `*📢 UPDATE SISTEM WEB TAROBUN*\n\n${escapeMdWebUpdate(message)}`;
+            const response = await fetchWithRetry(`https://api.telegram.org/bot${token}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' }),
+            });
+            if (response.ok) success.push(store.name);
+            else failed.push(store.name);
+          } catch (err) {
+            console.error('Gagal kirim Update Web ke toko:', store.name, err);
+            failed.push(store.name);
+          }
+        }
+        setWebUpdateReport({ success, failed });
+        setSendingWebUpdate(false);
+        if (success.length > 0) {
+          showAdminToast(`✅ Update Web terkirim ke ${success.length} toko.`);
+          setWebUpdateText('');
+        }
+      };
+
+      // ==========================================
+      // FITUR: PENGHAPUSAN LAPORAN >=7 HARI + NOTIFIKASI TOKO
+      // ==========================================
+      // Menghapus entri "Riwayat Penjualan & Stok" (stores/{id}/history) milik toko yang sedang
+      // dibuka di modal detail, yang usianya sudah 7 hari atau lebih (dihitung dari field "tanggal").
+      // Setelah terhapus, sistem otomatis mengirim notifikasi ke toko lewat Chat aplikasi (toko akan
+      // langsung dapat toast + suara + notifikasi browser seperti pesan chat admin biasa), supaya
+      // toko tahu laporan lamanya sudah dibersihkan oleh Admin.
+      const REPORT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 hari
+      const getOldReportEntries = (historyList) => {
+        const cutoff = Date.now() - REPORT_RETENTION_MS;
+        return (historyList || []).filter(h => {
+          const ts = h.tanggal ? new Date(h.tanggal).getTime() : (h.createdAt || 0);
+          return ts && ts < cutoff;
+        });
+      };
+
+      const handleDeleteOldReports = async () => {
+        if (!detailStore || !detailData) return;
+        const oldEntries = getOldReportEntries(detailData.historyList);
+        if (oldEntries.length === 0) {
+          setConfirmDeleteOldReports(false);
+          return;
+        }
+        setDeletingOldReports(true);
+        try {
+          const updates = {};
+          oldEntries.forEach(h => { updates[`stores/${detailStore.id}/history/${h.id}`] = null; });
+          await restMultiUpdate(updates);
+
+          // Kirim notifikasi otomatis ke toko lewat Chat, sebagai pemberitahuan laporan 7 hari lalu
+          // telah dibersihkan oleh Admin.
+          const notifText = `🧹 ${oldEntries.length} laporan penjualan & stok yang usianya sudah 7 hari atau lebih telah dibersihkan oleh Admin dari sistem, untuk menjaga performa aplikasi.`;
+          await restPush(db.ref(`chats/${detailStore.id}/messages`), {
+            sender: 'admin',
+            senderLabel: 'Sistem (Otomatis)',
+            text: notifText,
+            timestamp: Date.now(),
+          });
+
+          setConfirmDeleteOldReports(false);
+          showAdminToast(`🧹 ${oldEntries.length} laporan lama toko "${detailStore.name}" dihapus & toko sudah diberi tahu.`);
+        } catch (err) {
+          console.error('Gagal menghapus laporan lama:', err);
+          alert('Gagal menghapus laporan lama: periksa koneksi internet Anda.');
+        } finally {
+          setDeletingOldReports(false);
+        }
+      };
+
       // Ganti token login toko. Karena token lama tersimpan (info.token), admin bisa re-autentikasi
       // sebagai akun toko tersebut lewat instance auth kedua, lalu mengganti passwordnya.
       const handleRegenerateToken = async (store) => {
@@ -1203,6 +1639,13 @@ const { useState, useEffect } = React;
           <header className="bg-gradient-to-r from-indigo-900 to-purple-900 text-white shadow-md sticky top-0 z-20 px-4 py-3">
             <div className="max-w-5xl mx-auto flex justify-between items-center">
               <div className="flex items-center gap-2 min-w-0">
+                <button
+                  onClick={() => setShowMenu(true)}
+                  className="p-2 -ml-1 bg-white/10 hover:bg-white/20 rounded-lg text-white border border-white/20 transition-all shrink-0"
+                  title="Menu"
+                >
+                  <i data-lucide="menu" className="w-5 h-5"></i>
+                </button>
                 <div className="bg-white text-indigo-900 w-8 h-8 rounded-full font-bold flex items-center justify-center text-md tracking-wider shrink-0">A</div>
                 <div className="min-w-0">
                   <h1 className="font-bold text-sm md:text-base tracking-wide truncate">Panel Admin TAROBUN</h1>
@@ -1220,22 +1663,74 @@ const { useState, useEffect } = React;
                 </button>
               </div>
             </div>
-            <div className="max-w-5xl mx-auto flex gap-2 mt-3 overflow-x-auto">
-              <button onClick={() => setTab('stores')} className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap ${tab === 'stores' ? 'bg-white text-indigo-900' : 'bg-white/10 text-white'}`}>Kelola Toko</button>
-              <button onClick={() => setTab('formbuilder')} className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap ${tab === 'formbuilder' ? 'bg-white text-indigo-900' : 'bg-white/10 text-white'}`}>Form Builder</button>
-              <button onClick={() => setTab('chat')} className={`relative px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap ${tab === 'chat' ? 'bg-white text-indigo-900' : 'bg-white/10 text-white'}`}>
-                Chat
-                {totalAdminUnread > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center">{totalAdminUnread > 9 ? '9+' : totalAdminUnread}</span>
-                )}
-              </button>
-            </div>
           </header>
+
+          {/* Sidebar Hamburger Menu */}
+          {showMenu && (
+            <div className="fixed inset-0 z-40 flex">
+              {/* Overlay */}
+              <div className="fixed inset-0 bg-black/50" onClick={() => setShowMenu(false)}></div>
+
+              {/* Panel */}
+              <div className="relative bg-white w-72 max-w-[80%] h-full shadow-xl flex flex-col">
+                <div className="bg-gradient-to-r from-indigo-900 to-purple-900 text-white px-4 py-4 flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <div className="bg-white text-indigo-900 w-8 h-8 rounded-full font-bold flex items-center justify-center text-md tracking-wider">
+                      A
+                    </div>
+                    <div>
+                      <h2 className="font-bold text-sm tracking-wide">Panel Admin</h2>
+                      <p className="text-[10px] text-purple-200">Menu Navigasi</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setShowMenu(false)} className="p-1.5 hover:bg-white/10 rounded-lg">
+                    <i data-lucide="x" className="w-5 h-5"></i>
+                  </button>
+                </div>
+
+                <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-1">
+                  <button onClick={() => { setTab('stores'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${tab === 'stores' ? 'bg-indigo-50 text-indigo-900' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="store" className="w-4 h-4"></i>
+                    <span>Kelola Toko</span>
+                  </button>
+                  <button onClick={() => { setTab('formbuilder'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${tab === 'formbuilder' ? 'bg-indigo-50 text-indigo-900' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="layout-list" className="w-4 h-4"></i>
+                    <span>Form Builder</span>
+                  </button>
+                  <button onClick={() => { setTab('sop'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${tab === 'sop' ? 'bg-indigo-50 text-indigo-900' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="book-open" className="w-4 h-4"></i>
+                    <span>Panduan SOP</span>
+                    <span className="ml-auto text-[10px] bg-indigo-100 text-indigo-700 font-bold px-1.5 py-0.5 rounded-md">{sopCategories.length}</span>
+                  </button>
+                  <button onClick={() => { setTab('chat'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${tab === 'chat' ? 'bg-indigo-50 text-indigo-900' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="message-circle" className="w-4 h-4"></i>
+                    <span>Chat</span>
+                    {totalAdminUnread > 0 && <span className="ml-auto text-[10px] bg-rose-100 text-rose-700 font-bold px-1.5 py-0.5 rounded-md">{totalAdminUnread}</span>}
+                  </button>
+                  <button onClick={() => { setTab('webupdate'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${tab === 'webupdate' ? 'bg-indigo-50 text-indigo-900' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="megaphone" className="w-4 h-4"></i>
+                    <span>Update Web</span>
+                  </button>
+
+                  <div className="pt-3 mt-3 border-t border-slate-100 space-y-1">
+                    <button onClick={() => { setShowOnboarding(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-all">
+                      <i data-lucide="help-circle" className="w-4 h-4"></i>
+                      <span>Lihat Tur Panduan</span>
+                    </button>
+                    <button onClick={onLogout} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-rose-700 hover:bg-rose-50 transition-all">
+                      <i data-lucide="log-out" className="w-4 h-4"></i>
+                      <span>Keluar / Logout</span>
+                    </button>
+                  </div>
+                </nav>
+              </div>
+            </div>
+          )}
 
           {/* Banner error kalau listener notifikasi chat gagal (mis. Firebase Rules memblokir),
               supaya admin SADAR notifikasi sedang tidak berfungsi, bukan diam-diam gagal terus. */}
           {chatListenerError && (
-            <div className="bg-rose-600 text-white text-xs font-semibold px-4 py-2 text-center sticky top-[88px] z-20">
+            <div className="bg-rose-600 text-white text-xs font-semibold px-4 py-2 text-center sticky top-[60px] z-20">
               ⚠️ {chatListenerError}
             </div>
           )}
@@ -1428,6 +1923,160 @@ const { useState, useEffect } = React;
               </div>
             )}
 
+            {tab === 'sop' && (
+              <div className="space-y-4 max-w-3xl">
+                <div>
+                  <h2 className="font-bold text-slate-700 text-base">Panduan SOP</h2>
+                  <p className="text-xs text-slate-500 mt-1">Kelola Kategori SOP beserta isi teks dan foto/video pendukung. Pilih toko mana saja yang boleh melihat setiap kategori — kosongkan pilihan toko untuk membuatnya berlaku di semua toko.</p>
+                </div>
+
+                {/* Tambah Kategori Baru */}
+                <form onSubmit={handleAddSopCategory} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
+                  <h3 className="font-bold text-slate-700 text-sm">Tambah Kategori SOP</h3>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-600 mb-1">Nama Kategori</label>
+                    <input type="text" value={newSopName} onChange={(e) => setNewSopName(e.target.value)} placeholder="Contoh: SOP Kebersihan Dapur" className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs" required />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-600 mb-1">Isi Teks SOP</label>
+                    <textarea value={newSopContent} onChange={(e) => setNewSopContent(e.target.value)} placeholder="Tuliskan langkah-langkah SOP di sini..." rows={4} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"></textarea>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-600 mb-1">Berlaku untuk Toko Mana</label>
+                    <div className="flex flex-wrap gap-1.5 mb-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setNewSopStoreIds([])}
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${newSopStoreIds.length === 0 ? 'bg-indigo-900 text-white border-indigo-900' : 'bg-white text-slate-600 border-slate-300'}`}
+                      >
+                        Semua Toko
+                      </button>
+                      {stores.map(s => (
+                        <button
+                          type="button"
+                          key={s.id}
+                          onClick={() => toggleNewSopStore(s.id)}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${newSopStoreIds.includes(s.id) ? 'bg-indigo-900 text-white border-indigo-900' : 'bg-white text-slate-600 border-slate-300'}`}
+                        >
+                          {s.name}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-slate-400">Klik "Semua Toko" agar SOP ini muncul di semua cabang, atau pilih satu/beberapa toko tertentu saja.</p>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-600 mb-1">Foto/Video Pendukung (opsional)</label>
+                    <label className="inline-block text-[10px] font-bold px-2.5 py-1.5 rounded-lg cursor-pointer bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
+                      + Pilih Foto/Video
+                      <input
+                        type="file"
+                        accept="image/*,video/*"
+                        multiple
+                        onChange={(e) => { setNewSopFiles(prev => [...prev, ...Array.from(e.target.files || [])]); e.target.value = ''; }}
+                        className="hidden"
+                      />
+                    </label>
+                    {newSopFiles.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {newSopFiles.map((f, idx) => (
+                          <span key={idx} className="flex items-center gap-1 bg-slate-100 text-slate-600 text-[10px] font-semibold px-2 py-1 rounded-md">
+                            {f.type.startsWith('video/') ? '🎥' : '🖼️'} {f.name}
+                            <button type="button" onClick={() => setNewSopFiles(prev => prev.filter((_, i) => i !== idx))} className="text-slate-400 hover:text-rose-600 ml-0.5">
+                              <i data-lucide="x" className="w-3 h-3"></i>
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <button type="submit" disabled={savingSop} className="bg-indigo-900 disabled:opacity-50 text-white text-xs font-bold px-4 py-2 rounded-lg">
+                    {savingSop ? 'Menambahkan...' : '+ Tambah Kategori'}
+                  </button>
+                </form>
+
+                {/* Daftar Kategori SOP */}
+                <div className="space-y-3">
+                  {sopCategories.length === 0 ? (
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 text-center text-slate-400 text-sm">Belum ada kategori SOP. Tambahkan kategori pertama di atas.</div>
+                  ) : sopCategories.map(cat => (
+                    <div key={cat.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+                      {editingSopId === cat.id ? (
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-[10px] font-semibold text-slate-600 mb-1">Nama Kategori</label>
+                            <input type="text" value={editSopDraft.name} onChange={(e) => setEditSopDraft(prev => ({ ...prev, name: e.target.value }))} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs" />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-semibold text-slate-600 mb-1">Isi Teks SOP</label>
+                            <textarea value={editSopDraft.content} onChange={(e) => setEditSopDraft(prev => ({ ...prev, content: e.target.value }))} rows={4} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"></textarea>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-semibold text-slate-600 mb-1">Berlaku untuk Toko Mana</label>
+                            <div className="flex flex-wrap gap-1.5">
+                              <button type="button" onClick={() => setEditSopDraft(prev => ({ ...prev, storeIds: [] }))} className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${editSopDraft.storeIds.length === 0 ? 'bg-indigo-900 text-white border-indigo-900' : 'bg-white text-slate-600 border-slate-300'}`}>Semua Toko</button>
+                              {stores.map(s => (
+                                <button type="button" key={s.id} onClick={() => toggleEditSopStore(s.id)} className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${editSopDraft.storeIds.includes(s.id) ? 'bg-indigo-900 text-white border-indigo-900' : 'bg-white text-slate-600 border-slate-300'}`}>{s.name}</button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button onClick={() => handleSaveEditSop(cat.id)} disabled={savingSop} className="bg-indigo-900 disabled:opacity-50 text-white text-xs font-bold px-4 py-2 rounded-lg">Simpan</button>
+                            <button onClick={cancelEditSop} className="bg-slate-100 text-slate-600 text-xs font-bold px-4 py-2 rounded-lg">Batal</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <h3 className="font-bold text-slate-800 text-sm truncate">{cat.name}</h3>
+                              <p className="text-[10px] text-indigo-600 font-semibold mt-0.5">{getSopStoreLabel(cat)}</p>
+                            </div>
+                            <div className="flex gap-1.5 shrink-0">
+                              <button onClick={() => startEditSop(cat)} className="p-1.5 text-slate-500 hover:bg-slate-100 rounded-lg" title="Edit"><i data-lucide="pencil" className="w-3.5 h-3.5"></i></button>
+                              <button onClick={() => setConfirmDeleteSop(cat)} className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg" title="Hapus"><i data-lucide="trash-2" className="w-3.5 h-3.5"></i></button>
+                            </div>
+                          </div>
+                          {cat.content && <p className="text-xs text-slate-600 mt-2 whitespace-pre-wrap">{cat.content}</p>}
+                        </div>
+                      )}
+
+                      {/* Media Foto/Video */}
+                      <div className="mt-3 pt-3 border-t border-slate-100">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Foto/Video Pendukung ({cat.media.length})</p>
+                          <label className={`text-[10px] font-bold px-2.5 py-1.5 rounded-lg cursor-pointer ${uploadingSopMedia === cat.id ? 'bg-slate-100 text-slate-400' : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'}`}>
+                            {uploadingSopMedia === cat.id ? 'Mengupload...' : '+ Tambah File'}
+                            <input type="file" accept="image/*,video/*" multiple disabled={uploadingSopMedia === cat.id} onChange={(e) => { handleUploadSopMedia(cat.id, e.target.files); e.target.value = ''; }} className="hidden" />
+                          </label>
+                        </div>
+                        {cat.media.length > 0 && (
+                          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                            {cat.media.map(m => (
+                              <div key={m.id} className="relative group aspect-square bg-slate-100 rounded-lg overflow-hidden">
+                                {m.type === 'image' ? (
+                                  <img src={m.url} alt={m.name} className="w-full h-full object-cover" />
+                                ) : (
+                                  <video src={m.url} className="w-full h-full object-cover" muted></video>
+                                )}
+                                {m.type === 'video' && (
+                                  <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                                    <i data-lucide="play-circle" className="w-6 h-6 text-white"></i>
+                                  </div>
+                                )}
+                                <button onClick={() => handleDeleteSopMedia(cat.id, m)} className="absolute top-1 right-1 bg-black/60 hover:bg-rose-600 text-white rounded-full p-1" title="Hapus file">
+                                  <i data-lucide="x" className="w-3 h-3"></i>
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {tab === 'chat' && (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-3 md:col-span-1 max-h-[70vh] overflow-y-auto">
@@ -1446,6 +2095,73 @@ const { useState, useEffect } = React;
                     <ChatPanel storeId={activeChatStore.id} senderRole="admin" senderLabel="Admin" title={`Chat dengan ${activeChatStore.name}`} allowEndSession={true} />
                   ) : (
                     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center text-slate-400 text-sm">Pilih toko di sebelah kiri untuk mulai chat.</div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {tab === 'webupdate' && (
+              <div className="max-w-xl mx-auto space-y-4">
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+                  <div>
+                    <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5"><i data-lucide="megaphone" className="w-4 h-4 text-purple-700"></i> Broadcast Update Web</h3>
+                    <p className="text-[10px] text-slate-500 mt-1">Kirim informasi pembaruan sistem web langsung ke grup/channel Telegram toko lewat Bot Telegram masing-masing toko.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Isi Pesan Update</label>
+                    <textarea
+                      value={webUpdateText}
+                      onChange={(e) => setWebUpdateText(e.target.value)}
+                      rows={5}
+                      maxLength={1500}
+                      placeholder="Contoh: Sistem web sudah diperbarui, form Kedatangan Barang kini bisa diisi lewat HP tanpa lag..."
+                      className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm"
+                    ></textarea>
+                    <p className="text-[10px] text-slate-400 text-right mt-1">{webUpdateText.length}/1500</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-2">Store Tujuan</label>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      <button type="button" onClick={() => { setWebUpdateAll(true); setWebUpdateStoreIds([]); }} className={`px-3 py-1.5 rounded-full text-xs font-bold border ${webUpdateAll ? 'bg-purple-800 text-white border-purple-800' : 'bg-white text-slate-600 border-slate-300'}`}>
+                        Semua Toko
+                      </button>
+                      <button type="button" onClick={() => setWebUpdateAll(false)} className={`px-3 py-1.5 rounded-full text-xs font-bold border ${!webUpdateAll ? 'bg-purple-800 text-white border-purple-800' : 'bg-white text-slate-600 border-slate-300'}`}>
+                        Pilih Toko Tertentu
+                      </button>
+                    </div>
+                    {!webUpdateAll && (
+                      <div className="border border-slate-200 rounded-xl p-3 max-h-48 overflow-y-auto space-y-1">
+                        {stores.length === 0 && <p className="text-xs text-slate-400">Belum ada toko.</p>}
+                        {stores.map(store => (
+                          <label key={store.id} className="flex items-center gap-2 text-xs font-semibold text-slate-600 px-1 py-1">
+                            <input type="checkbox" checked={webUpdateStoreIds.includes(store.id)} onChange={() => toggleWebUpdateStore(store.id)} className="rounded" />
+                            {store.name}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={handleSendWebUpdate}
+                    disabled={sendingWebUpdate || !webUpdateText.trim()}
+                    className="w-full flex items-center justify-center gap-2 bg-purple-800 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl text-sm"
+                  >
+                    <i data-lucide="send" className="w-4 h-4"></i>
+                    {sendingWebUpdate ? 'Mengirim...' : 'Kirim'}
+                  </button>
+
+                  {webUpdateReport && (
+                    <div className="text-xs space-y-1 pt-1">
+                      {webUpdateReport.success.length > 0 && (
+                        <p className="text-emerald-600 font-semibold">✓ Terkirim: {webUpdateReport.success.join(', ')}</p>
+                      )}
+                      {webUpdateReport.failed.length > 0 && (
+                        <p className="text-rose-600 font-semibold">✗ Gagal: {webUpdateReport.failed.join(', ')}</p>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -1503,6 +2219,36 @@ const { useState, useEffect } = React;
                 <div className="flex gap-2">
                   <button onClick={() => setConfirmDelete(null)} className="flex-1 bg-slate-100 text-slate-600 font-bold py-2.5 rounded-xl text-sm">Batal</button>
                   <button onClick={() => handleDeleteStore(confirmDelete)} className="flex-1 bg-rose-600 text-white font-bold py-2.5 rounded-xl text-sm">Ya, Hapus</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Modal Konfirmasi Hapus Kategori SOP */}
+          {confirmDeleteSop && (
+            <div className="fixed inset-0 z-[90] bg-black/50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl w-full max-w-sm p-6">
+                <h3 className="font-bold text-slate-800 mb-2">Hapus Kategori SOP?</h3>
+                <p className="text-xs text-slate-500 mb-4">Kategori "{confirmDeleteSop.name}" beserta seluruh foto/video di dalamnya akan dihapus permanen dan tidak akan muncul lagi di aplikasi toko. Tindakan ini tidak bisa dibatalkan.</p>
+                <div className="flex gap-2">
+                  <button onClick={() => setConfirmDeleteSop(null)} className="flex-1 bg-slate-100 text-slate-600 font-bold py-2.5 rounded-xl text-sm">Batal</button>
+                  <button onClick={() => handleDeleteSopCategory(confirmDeleteSop)} className="flex-1 bg-rose-600 text-white font-bold py-2.5 rounded-xl text-sm">Ya, Hapus</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Modal Konfirmasi Hapus Laporan >=7 Hari */}
+          {confirmDeleteOldReports && detailStore && detailData && (
+            <div className="fixed inset-0 z-[95] bg-black/50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl w-full max-w-sm p-6">
+                <h3 className="font-bold text-slate-800 mb-2">Hapus Laporan Lama?</h3>
+                <p className="text-xs text-slate-500 mb-4">
+                  {getOldReportEntries(detailData.historyList).length} laporan penjualan & stok toko "{detailStore.name}" yang usianya sudah <b>7 hari atau lebih</b> akan dihapus permanen. Toko "{detailStore.name}" akan otomatis mendapat notifikasi lewat Chat bahwa laporan lamanya telah dibersihkan. Tindakan ini tidak bisa dibatalkan.
+                </p>
+                <div className="flex gap-2">
+                  <button onClick={() => setConfirmDeleteOldReports(false)} className="flex-1 bg-slate-100 text-slate-600 font-bold py-2.5 rounded-xl text-sm">Batal</button>
+                  <button onClick={handleDeleteOldReports} disabled={deletingOldReports} className="flex-1 bg-rose-600 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl text-sm">{deletingOldReports ? 'Menghapus...' : 'Ya, Hapus'}</button>
                 </div>
               </div>
             </div>
@@ -1568,7 +2314,14 @@ const { useState, useEffect } = React;
                     </div>
 
                     <div>
-                      <h4 className="font-bold text-slate-700 text-sm mb-2">Riwayat Penjualan & Stok</h4>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <h4 className="font-bold text-slate-700 text-sm">Riwayat Penjualan & Stok</h4>
+                        {getOldReportEntries(detailData.historyList).length > 0 && (
+                          <button onClick={() => setConfirmDeleteOldReports(true)} className="shrink-0 flex items-center gap-1 text-[10px] font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-100 px-2 py-1.5 rounded-lg">
+                            <i data-lucide="trash-2" className="w-3 h-3"></i> Hapus Laporan ≥7 Hari ({getOldReportEntries(detailData.historyList).length})
+                          </button>
+                        )}
+                      </div>
                       {detailData.historyList.length === 0 ? (
                         <p className="text-xs text-slate-400">Belum ada laporan.</p>
                       ) : (
@@ -1841,6 +2594,38 @@ useEffect(() => {
         const unbindInv = bindLiveValue(invFieldsRef, invHandler);
         return () => { unbindSales(); unbindInv(); };
       }, []);
+
+      // ==========================================
+      // PANDUAN SOP - STATE (Sisi Store)
+      // ==========================================
+      const [sopCategories, setSopCategories] = useState([]);
+      const [selectedSopCategory, setSelectedSopCategory] = useState(null);
+      const [sopLightboxUrl, setSopLightboxUrl] = useState(null);
+
+      useEffect(() => {
+        const ref = db.ref('sopCategories');
+        const belongsToThisStore = (cat) => !cat.storeIds || cat.storeIds.length === 0 || cat.storeIds.includes(storeId);
+        const handler = (snap) => {
+          const data = snap.val() || {};
+          const list = Object.keys(data).map(id => {
+            const c = data[id] || {};
+            const media = c.media ? Object.keys(c.media).map(mid => ({ id: mid, ...c.media[mid] })) : [];
+            media.sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0));
+            return { id, name: c.name || '(Tanpa Nama)', content: c.content || '', storeIds: c.storeIds || [], media, createdAt: c.createdAt || 0 };
+          }).filter(belongsToThisStore);
+          list.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+          setSopCategories(list);
+        };
+        return bindLiveValue(ref, handler);
+      }, []);
+
+      // Sinkronkan kategori yang sedang dibuka kalau ada perubahan real-time dari Admin
+      useEffect(() => {
+        if (!selectedSopCategory) return;
+        const updated = sopCategories.find(c => c.id === selectedSopCategory.id);
+        if (updated) setSelectedSopCategory(updated);
+        else setSelectedSopCategory(null);
+      }, [sopCategories]);
 
       // ==========================================
       // DATANG BARANG - STATE & MASTER DATA
@@ -3594,6 +4379,11 @@ Daily inventory done✅
                     <span>Riwayat Laporan</span>
                     <span className="ml-auto text-[10px] bg-indigo-100 text-indigo-700 font-bold px-1.5 py-0.5 rounded-md">{historyList.length}</span>
                   </button>
+                  <button onClick={() => { setActiveTab('sop'); setSelectedSopCategory(null); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${activeTab === 'sop' ? 'bg-purple-50 text-purple-800' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="book-open" className="w-4 h-4"></i>
+                    <span>Panduan SOP</span>
+                    <span className="ml-auto text-[10px] bg-indigo-100 text-indigo-700 font-bold px-1.5 py-0.5 rounded-md">{sopCategories.length}</span>
+                  </button>
                   <button onClick={() => { setActiveTab('chat'); setUnreadChat(0); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${activeTab === 'chat' ? 'bg-purple-50 text-purple-800' : 'text-slate-600 hover:bg-slate-50'}`}>
                     <i data-lucide="message-circle" className="w-4 h-4"></i>
                     <span>Chat Admin</span>
@@ -5065,6 +5855,87 @@ Daily inventory done✅
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Tab: Panduan SOP */}
+            {activeTab === 'sop' && (
+              <div className="space-y-4">
+                {!selectedSopCategory ? (
+                  <React.Fragment>
+                    <div>
+                      <h2 className="font-bold text-slate-700 text-base flex items-center gap-2">
+                        <i data-lucide="book-open" className="w-4 h-4 text-purple-700"></i>
+                        <span>Panduan SOP</span>
+                      </h2>
+                      <p className="text-xs text-slate-500 mt-1">Pilih kategori untuk melihat langkah-langkah SOP beserta foto/video pendukung.</p>
+                    </div>
+                    {sopCategories.length === 0 ? (
+                      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center text-slate-400 text-sm">Belum ada Panduan SOP untuk toko ini.</div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {sopCategories.map(cat => (
+                          <button key={cat.id} onClick={() => setSelectedSopCategory(cat)} className="text-left bg-white rounded-2xl border border-slate-200 shadow-sm p-4 hover:border-purple-300 hover:shadow-md transition-all">
+                            <div className="flex items-center justify-between">
+                              <div className="bg-purple-50 text-purple-700 p-2 rounded-lg">
+                                <i data-lucide="file-text" className="w-4 h-4"></i>
+                              </div>
+                              {cat.media.length > 0 && (
+                                <span className="text-[10px] bg-slate-100 text-slate-500 font-bold px-1.5 py-0.5 rounded-md flex items-center gap-1">
+                                  <i data-lucide="image" className="w-3 h-3"></i>{cat.media.length}
+                                </span>
+                              )}
+                            </div>
+                            <h3 className="font-bold text-slate-800 text-sm mt-2">{cat.name}</h3>
+                            {cat.content && <p className="text-xs text-slate-400 mt-1 line-clamp-2">{cat.content}</p>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </React.Fragment>
+                ) : (
+                  <React.Fragment>
+                    <button onClick={() => setSelectedSopCategory(null)} className="flex items-center gap-1.5 text-purple-700 text-xs font-bold">
+                      <i data-lucide="arrow-left" className="w-3.5 h-3.5"></i>
+                      <span>Kembali ke Panduan SOP</span>
+                    </button>
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+                      <h2 className="font-bold text-slate-800 text-base">{selectedSopCategory.name}</h2>
+                      {selectedSopCategory.content ? (
+                        <p className="text-sm text-slate-600 mt-2 whitespace-pre-wrap">{selectedSopCategory.content}</p>
+                      ) : (
+                        <p className="text-xs text-slate-400 mt-2">Belum ada isi teks untuk SOP ini.</p>
+                      )}
+
+                      {selectedSopCategory.media.length > 0 && (
+                        <div className="mt-4 pt-4 border-t border-slate-100">
+                          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-2">Foto/Video Pendukung</p>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                            {selectedSopCategory.media.map(m => (
+                              m.type === 'image' ? (
+                                <button key={m.id} onClick={() => setSopLightboxUrl(m.url)} className="aspect-square bg-slate-100 rounded-lg overflow-hidden">
+                                  <img src={m.url} alt={m.name} className="w-full h-full object-cover" />
+                                </button>
+                              ) : (
+                                <video key={m.id} src={m.url} controls className="aspect-square w-full bg-black rounded-lg object-cover"></video>
+                              )
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </React.Fragment>
+                )}
+
+                {/* Lightbox foto */}
+                {sopLightboxUrl && (
+                  <div className="fixed inset-0 z-[95] bg-black/80 flex items-center justify-center p-4" onClick={() => setSopLightboxUrl(null)}>
+                    <img src={sopLightboxUrl} className="max-w-full max-h-full rounded-lg" />
+                    <button onClick={() => setSopLightboxUrl(null)} className="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white rounded-full p-2">
+                      <i data-lucide="x" className="w-5 h-5"></i>
+                    </button>
                   </div>
                 )}
               </div>
