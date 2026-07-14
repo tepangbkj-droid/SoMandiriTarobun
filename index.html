@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
   <title>Tarobun Green Pramuka Hub</title>
 
+  <meta name="description" content="Aplikasi internal Tarobun Green Pramuka Hub untuk pencatatan penjualan, stok inventory, laporan suhu, dan koordinasi pusat.">
+
   <!-- Pengerasan keamanan dasar sisi browser (mitigasi injeksi script/clickjacking) -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.tailwindcss.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https://unpkg.com; connect-src 'self' https://*.firebaseio.com https://*.firebasedatabase.app wss://*.firebaseio.com wss://*.firebasedatabase.app https://*.googleapis.com https://unpkg.com https://api.telegram.org; frame-ancestors 'none'; base-uri 'self'; object-src 'none';">
   <meta http-equiv="X-Content-Type-Options" content="nosniff">
@@ -13,39 +15,52 @@
  <!-- React core -->
   <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#6D28D9">
- 
-<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+
+<script src="https://unpkg.com/react@18/umd/react.development.js" defer></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" defer></script>
 
 <!-- Babel (versi dipin, hindari @latest/min.js yang sering pecah di unpkg) -->
-<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.js" defer></script>
 
 <!-- Tailwind CDN (wajib ada sebelum tailwind.config dipanggil) -->
-<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.tailwindcss.com" defer></script>
 
 <!-- Firebase (Compat) -->
-<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-storage-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-storage-compat.js" defer></script>
 
 <!-- Lucide -->
-<script src="https://unpkg.com/lucide@latest"></script>
+<script src="https://unpkg.com/lucide@latest" defer></script>
 
   <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            brand: {
-              purple: '#6D28D9',
-              dark: '#1E1B4B'
+    // Karena script CDN di atas sekarang di-defer, konfigurasi tailwind ini
+    // (script inline, TIDAK ikut defer) harus ditunda sampai window "load"
+    // agar variabel global `tailwind` sudah pasti terdefinisi.
+    window.addEventListener('load', function () {
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: {
+                purple: '#6D28D9',
+                dark: '#1E1B4B'
+              }
             }
           }
         }
-      }
-    }
+      };
+    });
   </script>
+
+  <!-- Animasi untuk pop-up notifikasi Update Sistem -->
+  <style>
+    @keyframes tarobunFadeIn { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes tarobunScaleIn { from { opacity: 0; transform: scale(0.9) } to { opacity: 1; transform: scale(1) } }
+    .animate-fadeIn { animation: tarobunFadeIn 0.2s ease-out; }
+    .animate-scaleIn { animation: tarobunScaleIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  </style>
 </head>
 <body class="bg-slate-50 text-slate-800 font-sans">
 
@@ -631,7 +646,7 @@ const { useState, useEffect } = React;
               ))}
             </div>
             <div className="flex items-center justify-between gap-2">
-              <button onClick={onFinish} className="text-xs font-bold text-slate-400 hover:text-slate-600 px-2 py-2">
+              <button onClick={onFinish} className="text-xs font-bold text-slate-600 hover:text-slate-600 px-2 py-2">
                 Lewati Semua
               </button>
               <div className="flex items-center gap-2">
@@ -890,7 +905,7 @@ const { useState, useEffect } = React;
             <div className="flex flex-col items-center mb-6">
               <div className="bg-purple-800 text-white w-14 h-14 rounded-2xl font-bold flex items-center justify-center text-xl tracking-wider mb-3">TB</div>
               <h1 className="font-bold text-slate-800 text-lg">TAROBUN Green Pramuka Hub</h1>
-              <p className="text-xs text-slate-400 text-center mt-1">Masuk sebagai toko atau admin pusat</p>
+              <p className="text-xs text-slate-600 text-center mt-1">Masuk sebagai toko atau admin pusat</p>
             </div>
 
             <div className="grid grid-cols-2 gap-2 bg-slate-100 rounded-xl p-1 mb-6">
@@ -919,15 +934,15 @@ const { useState, useEffect } = React;
             {mode === 'store' ? (
               <form onSubmit={handleStoreLogin} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Nama Toko</label>
-                  <select value={storeId} onChange={(e) => setStoreId(e.target.value)} className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm bg-white" required disabled={dirLoading}>
+                  <label htmlFor="storeId" className="block text-xs font-semibold text-slate-600 mb-1">Nama Toko</label>
+                  <select id="storeId" value={storeId} onChange={(e) => setStoreId(e.target.value)} className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm bg-white" required disabled={dirLoading}>
                     <option value="">{dirLoading ? 'Memuat daftar toko...' : (storeDirectory.length === 0 ? 'Tidak ada toko terdaftar' : '-- Pilih Toko --')}</option>
                     {storeDirectory.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Token Toko</label>
-                  <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Masukkan token dari admin" className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm" required autoComplete="current-password" />
+                  <label htmlFor="token" className="block text-xs font-semibold text-slate-600 mb-1">Token Toko</label>
+                  <input id="token" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Masukkan token dari admin" className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm" required autoComplete="current-password" />
                 </div>
                 <button type="submit" disabled={loading} className="w-full bg-purple-800 hover:bg-purple-900 disabled:opacity-50 text-white font-bold py-3 rounded-xl text-sm">
                   {loading ? 'Memproses...' : 'Masuk sebagai Toko'}
@@ -946,13 +961,13 @@ const { useState, useEffect } = React;
                   </div>
                 )}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Password Admin</label>
-                  <input type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm" required autoComplete={adminExists === false ? 'new-password' : 'current-password'} minLength={adminExists === false ? 8 : undefined} />
+                  <label htmlFor="adminPassword" className="block text-xs font-semibold text-slate-600 mb-1">Password Admin</label>
+                  <input id="adminPassword" type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm" required autoComplete={adminExists === false ? 'new-password' : 'current-password'} minLength={adminExists === false ? 8 : undefined} />
                 </div>
                 {adminExists === false && (
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Konfirmasi Password</label>
-                    <input type="password" value={adminPassword2} onChange={(e) => setAdminPassword2(e.target.value)} className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm" required minLength={8} />
+                    <label htmlFor="adminPassword2" className="block text-xs font-semibold text-slate-600 mb-1">Konfirmasi Password</label>
+                    <input id="adminPassword2" type="password" value={adminPassword2} onChange={(e) => setAdminPassword2(e.target.value)} className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm" required minLength={8} />
                   </div>
                 )}
                 <button type="submit" disabled={loading} className="w-full bg-indigo-900 hover:bg-indigo-950 disabled:opacity-50 text-white font-bold py-3 rounded-xl text-sm">
@@ -1278,6 +1293,15 @@ const { useState, useEffect } = React;
         return bindLiveValue(ref, (snap) => setStores(toList(snap.val())));
       }, []);
 
+      // ==========================================
+      // MONITOR KEHADIRAN CABANG (Real-time Presence)
+      // ==========================================
+      const [storesPresence, setStoresPresence] = useState({});
+      useEffect(() => {
+        const ref = db.ref('storesPresence');
+        return bindLiveValue(ref, (snap) => setStoresPresence(snap.val() || {}));
+      }, []);
+
       // Live-update untuk modal detail toko. Sebelumnya pakai once('value') sehingga data (riwayat,
       // foto rijek, Telegram) di modal TIDAK otomatis ter-refresh selagi modal terbuka — admin harus
       // tutup lalu buka lagi untuk lihat laporan terbaru. Sekarang pakai listener realtime (.on) supaya
@@ -1508,6 +1532,18 @@ const { useState, useEffect } = React;
           }
         }
         setWebUpdateReport({ success, failed });
+
+        // Simpan juga ke Firebase agar semua Toko yang online menerima pop-up real-time
+        try {
+          await restSet(db.ref('systemUpdates/latest'), {
+            id: Date.now().toString(),
+            text: message,
+            timestamp: firebase.database.ServerValue.TIMESTAMP
+          });
+        } catch (err) {
+          console.error('Gagal menyimpan Update Web ke Firebase:', err);
+        }
+
         setSendingWebUpdate(false);
         if (success.length > 0) {
           showAdminToast(`✅ Update Web terkirim ke ${success.length} toko.`);
@@ -1748,20 +1784,47 @@ const { useState, useEffect } = React;
               <div className="space-y-4">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Total Cabang</p>
+                    <p className="text-[10px] font-bold text-slate-600 uppercase tracking-wide">Total Cabang</p>
                     <p className="text-2xl font-extrabold text-slate-800 mt-1">{stores.length}</p>
                   </div>
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Toko Aktif</p>
+                    <p className="text-[10px] font-bold text-slate-600 uppercase tracking-wide">Toko Aktif</p>
                     <p className="text-2xl font-extrabold text-emerald-600 mt-1">{stores.filter(s => s.active !== false).length}</p>
                   </div>
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Toko Nonaktif</p>
-                    <p className="text-2xl font-extrabold text-slate-400 mt-1">{stores.filter(s => s.active === false).length}</p>
+                    <p className="text-[10px] font-bold text-slate-600 uppercase tracking-wide">Toko Nonaktif</p>
+                    <p className="text-2xl font-extrabold text-slate-600 mt-1">{stores.filter(s => s.active === false).length}</p>
                   </div>
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Chat Belum Dibaca</p>
+                    <p className="text-[10px] font-bold text-slate-600 uppercase tracking-wide">Chat Belum Dibaca</p>
                     <p className="text-2xl font-extrabold text-rose-500 mt-1">{totalAdminUnread}</p>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+                  <h3 className="font-bold text-slate-700 text-sm mb-3">Monitor Kehadiran Cabang</h3>
+                  <div className="space-y-2">
+                    {stores.map(store => {
+                      const p = storesPresence[store.id];
+                      const isOnline = p?.isOnline === true;
+                      const lastSeenStr = p?.lastSeen
+                        ? new Date(p.lastSeen).toLocaleString('id-ID', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' })
+                        : 'Belum pernah aktif';
+                      return (
+                        <div key={store.id} className="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${isOnline ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
+                            <span className="text-sm font-semibold text-slate-700 truncate">{store.name}</span>
+                          </div>
+                          <span className="text-[10px] text-slate-600 shrink-0 ml-2">
+                            {isOnline ? 'Sedang dibuka' : `Terakhir aktif: ${lastSeenStr}`}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    {stores.length === 0 && (
+                      <p className="text-xs text-slate-600 text-center py-4">Belum ada toko.</p>
+                    )}
                   </div>
                 </div>
 
@@ -1780,7 +1843,7 @@ const { useState, useEffect } = React;
                       <div className="flex items-start justify-between gap-2 mb-2">
                         <div className="min-w-0">
                           <h3 className="font-bold text-slate-800 text-sm truncate">{store.name}</h3>
-                          <p className="text-[10px] text-slate-400">Dibuat: {store.createdAt ? new Date(store.createdAt).toLocaleDateString('id-ID') : '-'}</p>
+                          <p className="text-[10px] text-slate-600">Dibuat: {store.createdAt ? new Date(store.createdAt).toLocaleDateString('id-ID') : '-'}</p>
                           {store.active === false && <span className="inline-block mt-1 text-[9px] font-bold text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded">NONAKTIF</span>}
                         </div>
                         <i data-lucide="store" className="w-5 h-5 text-purple-600 shrink-0"></i>
@@ -1801,7 +1864,7 @@ const { useState, useEffect } = React;
                     </div>
                   ))}
                   {stores.length === 0 && (
-                    <div className="col-span-full text-center py-12 text-slate-400 text-sm">Belum ada toko. Klik "Tambah Toko" untuk membuat cabang pertama.</div>
+                    <div className="col-span-full text-center py-12 text-slate-600 text-sm">Belum ada toko. Klik "Tambah Toko" untuk membuat cabang pertama.</div>
                   )}
                 </div>
               </div>
@@ -1818,34 +1881,34 @@ const { useState, useEffect } = React;
                   <h3 className="font-bold text-slate-700 text-sm">Tambah Field Baru</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[10px] font-semibold text-slate-600 mb-1">Form Tujuan</label>
-                      <select value={newFieldTarget} onChange={(e) => setNewFieldTarget(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white">
+                      <label htmlFor="newFieldTarget" className="block text-[10px] font-semibold text-slate-600 mb-1">Form Tujuan</label>
+                      <select id="newFieldTarget" value={newFieldTarget} onChange={(e) => setNewFieldTarget(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white">
                         <option value="sales">Laporan Penjualan</option>
                         <option value="inventory">SO Stok / Inventory</option>
                       </select>
                       {newFieldTarget === 'sales' && (
-                        <p className="text-[10px] text-slate-400 mt-1">Pilih "SO Stok / Inventory" di atas untuk memunculkan pilihan Bagian penempatan field.</p>
+                        <p className="text-[10px] text-slate-600 mt-1">Pilih "SO Stok / Inventory" di atas untuk memunculkan pilihan Bagian penempatan field.</p>
                       )}
                     </div>
                     <div>
-                      <label className="block text-[10px] font-semibold text-slate-600 mb-1">Tipe Input</label>
-                      <select value={newFieldType} onChange={(e) => setNewFieldType(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white">
+                      <label htmlFor="newFieldType" className="block text-[10px] font-semibold text-slate-600 mb-1">Tipe Input</label>
+                      <select id="newFieldType" value={newFieldType} onChange={(e) => setNewFieldType(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white">
                         <option value="number">Angka</option>
                         <option value="text">Teks</option>
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[10px] font-semibold text-slate-600 mb-1">Nama / Label Field</label>
-                      <input type="text" value={newFieldLabel} onChange={(e) => setNewFieldLabel(e.target.value)} placeholder="Contoh: Stok Sedotan" className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs" required />
+                      <label htmlFor="newFieldLabel" className="block text-[10px] font-semibold text-slate-600 mb-1">Nama / Label Field</label>
+                      <input id="newFieldLabel" type="text" value={newFieldLabel} onChange={(e) => setNewFieldLabel(e.target.value)} placeholder="Contoh: Stok Sedotan" className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs" required />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-semibold text-slate-600 mb-1">Satuan (opsional)</label>
-                      <input type="text" value={newFieldUnit} onChange={(e) => setNewFieldUnit(e.target.value)} placeholder="Contoh: pcs" className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs" />
+                      <label htmlFor="newFieldUnit" className="block text-[10px] font-semibold text-slate-600 mb-1">Satuan (opsional)</label>
+                      <input id="newFieldUnit" type="text" value={newFieldUnit} onChange={(e) => setNewFieldUnit(e.target.value)} placeholder="Contoh: pcs" className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs" />
                     </div>
                     {newFieldTarget === 'inventory' && (
                       <div className="sm:col-span-2">
-                        <label className="block text-[10px] font-semibold text-slate-600 mb-1">Bagian (di mana field ini akan muncul)</label>
-                        <select value={newFieldSection} onChange={(e) => setNewFieldSection(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white">
+                        <label htmlFor="newFieldSection" className="block text-[10px] font-semibold text-slate-600 mb-1">Bagian (di mana field ini akan muncul)</label>
+                        <select id="newFieldSection" value={newFieldSection} onChange={(e) => setNewFieldSection(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white">
                           {INVENTORY_FORM_SECTIONS.map(s => (
                             <option key={s.value} value={s.value}>{s.label}</option>
                           ))}
@@ -1873,7 +1936,7 @@ const { useState, useEffect } = React;
                           </button>
                         ))}
                       </div>
-                      <p className="text-[10px] text-slate-400">Klik "Semua Toko" agar berlaku untuk semua, atau pilih satu/beberapa toko tertentu saja. Field ini juga akan otomatis ikut muncul di laporan Telegram sesuai toko yang dipilih.</p>
+                      <p className="text-[10px] text-slate-600">Klik "Semua Toko" agar berlaku untuk semua, atau pilih satu/beberapa toko tertentu saja. Field ini juga akan otomatis ikut muncul di laporan Telegram sesuai toko yang dipilih.</p>
                     </div>
                   </div>
                   <button type="submit" disabled={savingField} className="bg-purple-800 disabled:opacity-50 text-white text-xs font-bold px-4 py-2 rounded-lg">
@@ -1885,7 +1948,7 @@ const { useState, useEffect } = React;
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
                     <h3 className="font-bold text-slate-700 text-sm mb-3">Field Tambahan — Laporan Penjualan</h3>
                     {formSchemas.sales.length === 0 ? (
-                      <p className="text-xs text-slate-400">Belum ada field tambahan.</p>
+                      <p className="text-xs text-slate-600">Belum ada field tambahan.</p>
                     ) : (
                       <div className="space-y-2">
                         {formSchemas.sales.map(f => (
@@ -1903,7 +1966,7 @@ const { useState, useEffect } = React;
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
                     <h3 className="font-bold text-slate-700 text-sm mb-3">Field Tambahan — SO Stok</h3>
                     {formSchemas.inventory.length === 0 ? (
-                      <p className="text-xs text-slate-400">Belum ada field tambahan.</p>
+                      <p className="text-xs text-slate-600">Belum ada field tambahan.</p>
                     ) : (
                       <div className="space-y-2">
                         {formSchemas.inventory.map(f => (
@@ -1934,8 +1997,8 @@ const { useState, useEffect } = React;
                 <form onSubmit={handleAddSopCategory} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
                   <h3 className="font-bold text-slate-700 text-sm">Tambah Kategori SOP</h3>
                   <div>
-                    <label className="block text-[10px] font-semibold text-slate-600 mb-1">Nama Kategori</label>
-                    <input type="text" value={newSopName} onChange={(e) => setNewSopName(e.target.value)} placeholder="Contoh: SOP Kebersihan Dapur" className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs" required />
+                    <label htmlFor="newSopName" className="block text-[10px] font-semibold text-slate-600 mb-1">Nama Kategori</label>
+                    <input id="newSopName" type="text" value={newSopName} onChange={(e) => setNewSopName(e.target.value)} placeholder="Contoh: SOP Kebersihan Dapur" className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs" required />
                   </div>
                   <div>
                     <label className="block text-[10px] font-semibold text-slate-600 mb-1">Isi Teks SOP</label>
@@ -1962,7 +2025,7 @@ const { useState, useEffect } = React;
                         </button>
                       ))}
                     </div>
-                    <p className="text-[10px] text-slate-400">Klik "Semua Toko" agar SOP ini muncul di semua cabang, atau pilih satu/beberapa toko tertentu saja.</p>
+                    <p className="text-[10px] text-slate-600">Klik "Semua Toko" agar SOP ini muncul di semua cabang, atau pilih satu/beberapa toko tertentu saja.</p>
                   </div>
                   <div>
                     <label className="block text-[10px] font-semibold text-slate-600 mb-1">Foto/Video Pendukung (opsional)</label>
@@ -1981,7 +2044,7 @@ const { useState, useEffect } = React;
                         {newSopFiles.map((f, idx) => (
                           <span key={idx} className="flex items-center gap-1 bg-slate-100 text-slate-600 text-[10px] font-semibold px-2 py-1 rounded-md">
                             {f.type.startsWith('video/') ? '🎥' : '🖼️'} {f.name}
-                            <button type="button" onClick={() => setNewSopFiles(prev => prev.filter((_, i) => i !== idx))} className="text-slate-400 hover:text-rose-600 ml-0.5">
+                            <button type="button" onClick={() => setNewSopFiles(prev => prev.filter((_, i) => i !== idx))} className="text-slate-600 hover:text-rose-600 ml-0.5">
                               <i data-lucide="x" className="w-3 h-3"></i>
                             </button>
                           </span>
@@ -1997,14 +2060,14 @@ const { useState, useEffect } = React;
                 {/* Daftar Kategori SOP */}
                 <div className="space-y-3">
                   {sopCategories.length === 0 ? (
-                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 text-center text-slate-400 text-sm">Belum ada kategori SOP. Tambahkan kategori pertama di atas.</div>
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 text-center text-slate-600 text-sm">Belum ada kategori SOP. Tambahkan kategori pertama di atas.</div>
                   ) : sopCategories.map(cat => (
                     <div key={cat.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
                       {editingSopId === cat.id ? (
                         <div className="space-y-3">
                           <div>
-                            <label className="block text-[10px] font-semibold text-slate-600 mb-1">Nama Kategori</label>
-                            <input type="text" value={editSopDraft.name} onChange={(e) => setEditSopDraft(prev => ({ ...prev, name: e.target.value }))} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs" />
+                            <label htmlFor="editSopDraft_name" className="block text-[10px] font-semibold text-slate-600 mb-1">Nama Kategori</label>
+                            <input id="editSopDraft_name" type="text" value={editSopDraft.name} onChange={(e) => setEditSopDraft(prev => ({ ...prev, name: e.target.value }))} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs" />
                           </div>
                           <div>
                             <label className="block text-[10px] font-semibold text-slate-600 mb-1">Isi Teks SOP</label>
@@ -2044,7 +2107,7 @@ const { useState, useEffect } = React;
                       <div className="mt-3 pt-3 border-t border-slate-100">
                         <div className="flex items-center justify-between mb-2">
                           <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Foto/Video Pendukung ({cat.media.length})</p>
-                          <label className={`text-[10px] font-bold px-2.5 py-1.5 rounded-lg cursor-pointer ${uploadingSopMedia === cat.id ? 'bg-slate-100 text-slate-400' : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'}`}>
+                          <label className={`text-[10px] font-bold px-2.5 py-1.5 rounded-lg cursor-pointer ${uploadingSopMedia === cat.id ? 'bg-slate-100 text-slate-600' : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'}`}>
                             {uploadingSopMedia === cat.id ? 'Mengupload...' : '+ Tambah File'}
                             <input type="file" accept="image/*,video/*" multiple disabled={uploadingSopMedia === cat.id} onChange={(e) => { handleUploadSopMedia(cat.id, e.target.files); e.target.value = ''; }} className="hidden" />
                           </label>
@@ -2094,7 +2157,7 @@ const { useState, useEffect } = React;
                   {activeChatStore ? (
                     <ChatPanel storeId={activeChatStore.id} senderRole="admin" senderLabel="Admin" title={`Chat dengan ${activeChatStore.name}`} allowEndSession={true} />
                   ) : (
-                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center text-slate-400 text-sm">Pilih toko di sebelah kiri untuk mulai chat.</div>
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center text-slate-600 text-sm">Pilih toko di sebelah kiri untuk mulai chat.</div>
                   )}
                 </div>
               </div>
@@ -2118,7 +2181,7 @@ const { useState, useEffect } = React;
                       placeholder="Contoh: Sistem web sudah diperbarui, form Kedatangan Barang kini bisa diisi lewat HP tanpa lag..."
                       className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm"
                     ></textarea>
-                    <p className="text-[10px] text-slate-400 text-right mt-1">{webUpdateText.length}/1500</p>
+                    <p className="text-[10px] text-slate-600 text-right mt-1">{webUpdateText.length}/1500</p>
                   </div>
 
                   <div>
@@ -2133,7 +2196,7 @@ const { useState, useEffect } = React;
                     </div>
                     {!webUpdateAll && (
                       <div className="border border-slate-200 rounded-xl p-3 max-h-48 overflow-y-auto space-y-1">
-                        {stores.length === 0 && <p className="text-xs text-slate-400">Belum ada toko.</p>}
+                        {stores.length === 0 && <p className="text-xs text-slate-600">Belum ada toko.</p>}
                         {stores.map(store => (
                           <label key={store.id} className="flex items-center gap-2 text-xs font-semibold text-slate-600 px-1 py-1">
                             <input type="checkbox" checked={webUpdateStoreIds.includes(store.id)} onChange={() => toggleWebUpdateStore(store.id)} className="rounded" />
@@ -2175,8 +2238,8 @@ const { useState, useEffect } = React;
                 <h3 className="font-bold text-slate-800 mb-4">Tambah Cabang Toko</h3>
                 <form onSubmit={handleAddStore} className="space-y-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Nama Toko</label>
-                    <input type="text" value={newStoreName} onChange={(e) => setNewStoreName(e.target.value)} placeholder="Contoh: Tarobun Cabang Kelapa Gading" className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm" required />
+                    <label htmlFor="newStoreName" className="block text-xs font-semibold text-slate-600 mb-1">Nama Toko</label>
+                    <input id="newStoreName" type="text" value={newStoreName} onChange={(e) => setNewStoreName(e.target.value)} placeholder="Contoh: Tarobun Cabang Kelapa Gading" className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm" required />
                   </div>
                   <div className="flex gap-2">
                     <button type="button" onClick={() => setShowAdd(false)} className="flex-1 bg-slate-100 text-slate-600 font-bold py-2.5 rounded-xl text-sm">Batal</button>
@@ -2260,10 +2323,10 @@ const { useState, useEffect } = React;
               <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto p-6">
                 <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-100">
                   <h3 className="font-bold text-slate-800 text-lg">{detailStore.name}</h3>
-                  <button onClick={() => setDetailStore(null)} className="text-slate-400 hover:text-slate-600"><i data-lucide="x" className="w-5 h-5"></i></button>
+                  <button onClick={() => setDetailStore(null)} className="text-slate-600 hover:text-slate-600"><i data-lucide="x" className="w-5 h-5"></i></button>
                 </div>
                 {detailLoading ? (
-                  <p className="text-sm text-slate-400 text-center py-10">Memuat data...</p>
+                  <p className="text-sm text-slate-600 text-center py-10">Memuat data...</p>
                 ) : detailData ? (
                   <div className="space-y-6">
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
@@ -2290,12 +2353,12 @@ const { useState, useEffect } = React;
                       <h4 className="font-bold text-slate-700 text-sm flex items-center gap-1.5"><i data-lucide="send" className="w-3.5 h-3.5"></i> Integrasi Bot Telegram</h4>
                       <p className="text-[10px] text-slate-500">Hanya admin yang dapat mengatur ini. Toko tidak lagi bisa mengubah Bot Token / Chat ID sendiri.</p>
                       <div>
-                        <label className="block text-[10px] font-semibold text-slate-600 mb-1">Bot Token</label>
-                        <input type="text" value={telegramForm.botToken} onChange={(e) => setTelegramForm({ ...telegramForm, botToken: e.target.value })} placeholder="123456:ABC-..." className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono" />
+                        <label htmlFor="telegramForm_botToken" className="block text-[10px] font-semibold text-slate-600 mb-1">Bot Token</label>
+                        <input id="telegramForm_botToken" type="text" value={telegramForm.botToken} onChange={(e) => setTelegramForm({ ...telegramForm, botToken: e.target.value })} placeholder="123456:ABC-..." className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono" />
                       </div>
                       <div>
-                        <label className="block text-[10px] font-semibold text-slate-600 mb-1">Chat ID</label>
-                        <input type="text" value={telegramForm.chatId} onChange={(e) => setTelegramForm({ ...telegramForm, chatId: e.target.value })} placeholder="-100..." className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono" />
+                        <label htmlFor="telegramForm_chatId" className="block text-[10px] font-semibold text-slate-600 mb-1">Chat ID</label>
+                        <input id="telegramForm_chatId" type="text" value={telegramForm.chatId} onChange={(e) => setTelegramForm({ ...telegramForm, chatId: e.target.value })} placeholder="-100..." className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono" />
                       </div>
                       <button onClick={handleSaveTelegramConfig} disabled={savingTelegram} className="w-full bg-sky-700 disabled:opacity-50 text-white text-xs font-bold py-2 rounded-lg">
                         {savingTelegram ? 'Menyimpan...' : (telegramSaved ? '✓ Tersimpan' : 'Simpan Integrasi Telegram')}
@@ -2323,7 +2386,7 @@ const { useState, useEffect } = React;
                         )}
                       </div>
                       {detailData.historyList.length === 0 ? (
-                        <p className="text-xs text-slate-400">Belum ada laporan.</p>
+                        <p className="text-xs text-slate-600">Belum ada laporan.</p>
                       ) : (
                         <div className="divide-y divide-slate-100 max-h-56 overflow-y-auto border border-slate-100 rounded-xl">
                           {detailData.historyList.map((h, i) => (
@@ -2356,7 +2419,7 @@ const { useState, useEffect } = React;
                     <div>
                       <h4 className="font-bold text-slate-700 text-sm mb-2">Foto Rijek / Waste ({detailData.wasteList.length})</h4>
                       {detailData.wasteList.length === 0 ? (
-                        <p className="text-xs text-slate-400">Belum ada foto.</p>
+                        <p className="text-xs text-slate-600">Belum ada foto.</p>
                       ) : (
                         <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
                           {detailData.wasteList.slice(0, 12).map((w, i) => (
@@ -2422,6 +2485,45 @@ const { useState, useEffect } = React;
         setSession(null);
       };
 
+      // ==========================================
+      // AUTO-LOGOUT KARENA TIDAK ADA AKTIVITAS (45 MENIT)
+      // ==========================================
+      useEffect(() => {
+        if (!session) return;
+        const TIMEOUT_MS = 45 * 60 * 1000;
+        let timer = null;
+
+        const doInactivityLogout = async () => {
+          try {
+            if (session.role === 'store' && session.storeId) {
+              await restSet(db.ref(`storesPresence/${session.storeId}`), {
+                isOnline: false,
+                lastSeen: firebase.database.ServerValue.TIMESTAMP,
+                storeName: session.storeName || ''
+              }).catch(() => {});
+            }
+          } finally {
+            await auth.signOut();
+            clearSession();
+            setSession(null);
+          }
+        };
+
+        const resetTimer = () => {
+          clearTimeout(timer);
+          timer = setTimeout(doInactivityLogout, TIMEOUT_MS);
+        };
+
+        const activityEvents = ['click', 'scroll', 'keydown', 'touchstart', 'mousemove'];
+        activityEvents.forEach(evt => window.addEventListener(evt, resetTimer, { passive: true }));
+        resetTimer();
+
+        return () => {
+          clearTimeout(timer);
+          activityEvents.forEach(evt => window.removeEventListener(evt, resetTimer));
+        };
+      }, [session]);
+
       if (checking) {
         return (
           <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -2467,6 +2569,57 @@ const { useState, useEffect } = React;
         setShowOnboarding(false);
       };
       const [unreadChat, setUnreadChat] = useState(0);
+
+      // ==========================================
+      // REAL-TIME PRESENCE: status online/offline toko
+      // ==========================================
+      useEffect(() => {
+        const presenceRef = db.ref(`storesPresence/${storeId}`);
+        const connectedRef = db.ref('.info/connected');
+
+        const onConnectedChange = (snap) => {
+          if (snap.val() === true) {
+            presenceRef.onDisconnect().set({
+              isOnline: false,
+              lastSeen: firebase.database.ServerValue.TIMESTAMP,
+              storeName
+            }).then(() => {
+              presenceRef.set({
+                isOnline: true,
+                lastSeen: firebase.database.ServerValue.TIMESTAMP,
+                storeName
+              });
+            });
+          }
+        };
+
+        connectedRef.on('value', onConnectedChange);
+        return () => connectedRef.off('value', onConnectedChange);
+      }, [storeId, storeName]);
+
+      // ==========================================
+      // POP-UP NOTIFIKASI UPDATE SISTEM DARI ADMIN
+      // ==========================================
+      const [systemUpdate, setSystemUpdate] = useState(null);
+      const [showUpdatePopup, setShowUpdatePopup] = useState(false);
+
+      useEffect(() => {
+        const ref = db.ref('systemUpdates/latest');
+        return bindLiveValue(ref, (snap) => {
+          const data = snap.val();
+          if (!data || !data.id) return;
+          const seenId = localStorage.getItem('tarobun_seen_update_id');
+          if (seenId !== String(data.id)) {
+            setSystemUpdate(data);
+            setShowUpdatePopup(true);
+          }
+        });
+      }, []);
+
+      const dismissSystemUpdate = () => {
+        if (systemUpdate) localStorage.setItem('tarobun_seen_update_id', String(systemUpdate.id));
+        setShowUpdatePopup(false);
+      };
 
       // Re-initialize icons on every render
 useEffect(() => {
@@ -4277,6 +4430,23 @@ Daily inventory done✅
 
       return (
         <div className="min-h-screen bg-slate-50 text-slate-800">
+          {showUpdatePopup && systemUpdate && (
+            <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4 animate-fadeIn">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-purple-100 animate-scaleIn">
+                <div className="w-14 h-14 rounded-full bg-purple-100 flex items-center justify-center text-2xl mx-auto mb-4">
+                  📢
+                </div>
+                <h3 className="text-center font-bold text-slate-800 text-base mb-2">Update Sistem</h3>
+                <p className="text-center text-sm text-slate-600 whitespace-pre-line mb-5">{systemUpdate.text}</p>
+                <button
+                  onClick={dismissSystemUpdate}
+                  className="w-full bg-purple-800 hover:bg-purple-900 text-white font-bold py-3 rounded-xl text-sm transition-all"
+                >
+                  Paham
+                </button>
+              </div>
+            </div>
+          )}
           {/* Header */}
           <header className="bg-gradient-to-r from-purple-800 to-indigo-900 text-white shadow-md sticky top-0 z-20 px-4 py-3">
             <div className="max-w-4xl mx-auto flex justify-between items-center">
@@ -4424,20 +4594,21 @@ Daily inventory done✅
                     <i data-lucide="settings" className="w-4 h-4 text-purple-700"></i>
                     <span>Pengaturan Integrasi Eksternal</span>
                   </h3>
-                  <button onClick={() => setShowConfig(false)} className="text-slate-400 hover:text-slate-600 text-xs font-bold">Tutup</button>
+                  <button onClick={() => setShowConfig(false)} className="text-slate-600 hover:text-slate-600 text-xs font-bold">Tutup</button>
                 </div>
                 <form onSubmit={handleSaveConfig} className="space-y-4">
                   <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
                     <p className="text-xs font-semibold text-slate-600 flex items-center gap-1.5 mb-2"><i data-lucide="lock" className="w-3.5 h-3.5"></i> Integrasi Bot Telegram</p>
                     <p className="text-[11px] text-slate-500 mb-2">Bot Token & Chat ID sekarang diatur langsung oleh Admin Pusat dan tidak bisa diubah dari sini.</p>
-                    <p className="text-[11px] font-mono text-slate-400">
+                    <p className="text-[11px] font-mono text-slate-600">
                       Status: {config.telegramBotToken && config.telegramChatId ? <span className="text-emerald-600 font-bold">✓ Terhubung</span> : <span className="text-rose-500 font-bold">Belum diatur admin</span>}
                     </p>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Google App Script Web App URL</label>
+                      <label htmlFor="google-app-script-web-app-url" className="block text-xs font-semibold text-slate-600 mb-1">Google App Script Web App URL</label>
                       <input 
+                        id="google-app-script-web-app-url"
                         type="text" 
                         value={config.googleAppScriptUrl}
                         onChange={(e) => setConfig({ ...config, googleAppScriptUrl: e.target.value })}
@@ -4460,7 +4631,7 @@ Daily inventory done✅
                   <i data-lucide="file-text" className="w-5 h-5"></i>
                 </div>
                 <div>
-                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Tanggal Kerja Aktif</p>
+                  <p className="text-[10px] text-slate-600 font-bold uppercase tracking-wider">Tanggal Kerja Aktif</p>
                   <h2 className="font-bold text-slate-700 text-sm md:text-base">
                     {formatIndonesianDate(salesData.tanggal)}
                   </h2>
@@ -4500,26 +4671,26 @@ Daily inventory done✅
                 {/* Stats Grid */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Roti Terjual</span>
+                    <span className="text-[10px] text-slate-600 font-bold uppercase tracking-wider block mb-1">Roti Terjual</span>
                     <span className="text-2xl font-extrabold text-indigo-900 block">{totalBunsSold} <span className="text-xs font-normal">pcs</span></span>
-                    <span className="text-[10px] text-slate-400 mt-1 block">Fam Box: {salesData.soldBuns.familyBox || 0}</span>
+                    <span className="text-[10px] text-slate-600 mt-1 block">Fam Box: {salesData.soldBuns.familyBox || 0}</span>
                   </div>
                   <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Minuman</span>
+                    <span className="text-[10px] text-slate-600 font-bold uppercase tracking-wider block mb-1">Minuman</span>
                     <span className="text-2xl font-extrabold text-purple-700 block">{totalBeveragesSold} <span className="text-xs font-normal">cup</span></span>
-                    <span className="text-[10px] text-slate-400 mt-1 block">Semua Varian Taro</span>
+                    <span className="text-[10px] text-slate-600 mt-1 block">Semua Varian Taro</span>
                   </div>
                   <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Total EDC & Cash</span>
+                    <span className="text-[10px] text-slate-600 font-bold uppercase tracking-wider block mb-1">Total EDC & Cash</span>
                     <span className="text-md font-extrabold text-emerald-600 block truncate">Rp {numVal(salesData.financials.value).toLocaleString('id-ID')}</span>
-                    <span className="text-[10px] text-slate-400 mt-1 block">Tx: {salesData.financials.transaksi || 0}</span>
+                    <span className="text-[10px] text-slate-600 mt-1 block">Tx: {salesData.financials.transaksi || 0}</span>
                   </div>
                   <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">Gagal Baking / Roti Matang</span>
+                    <span className="text-[10px] text-slate-600 font-bold uppercase tracking-wider block mb-1">Gagal Baking / Roti Matang</span>
                     <span className="text-xl font-extrabold text-amber-600 block">
                       {numVal(salesData.waste.doughGagalBaking)} / {numVal(salesData.waste.rotiMatang)} <span className="text-xs font-normal">pcs</span>
                     </span>
-                    <span className="text-[10px] text-slate-400 mt-1 block">Bake: {salesData.waste.doughGagalBaking || 0} | Matang: {salesData.waste.rotiMatang || 0}</span>
+                    <span className="text-[10px] text-slate-600 mt-1 block">Bake: {salesData.waste.doughGagalBaking || 0} | Matang: {salesData.waste.rotiMatang || 0}</span>
                   </div>
                 </div>
 
@@ -4530,13 +4701,13 @@ Daily inventory done✅
                       <i data-lucide="trending-up" className="w-5 h-5 text-purple-700"></i>
                       <span>Kebutuhan Bahan Bakery (Dough & Fillings)</span>
                     </h3>
-                    <p className="text-xs text-slate-400">Konversi otomatis (x25g / 1000) ke satuan KG</p>
+                    <p className="text-xs text-slate-600">Konversi otomatis (x25g / 1000) ke satuan KG</p>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="bg-slate-50 rounded-xl p-4 flex flex-col justify-between">
                       <div>
-                        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Estimasi Frozen Dough Keluar</span>
+                        <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Estimasi Frozen Dough Keluar</span>
                         <div className="flex items-baseline space-x-1.5 mt-1">
                           <span className="text-3xl font-black text-purple-800">{totalBunsSold}</span>
                           <span className="text-xs font-semibold text-slate-500">pcs hari ini</span>
@@ -4557,7 +4728,7 @@ Daily inventory done✅
                     </div>
 
                     <div className="space-y-2">
-                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Kebutuhan Filling & Topping (KG)</span>
+                      <span className="text-xs font-bold text-slate-600 uppercase tracking-wider block">Kebutuhan Filling & Topping (KG)</span>
                       
                       <div className="flex justify-between items-center bg-purple-50 p-2 rounded-lg">
                         <span className="text-xs font-bold text-slate-700">Topping Taro</span>
@@ -4598,7 +4769,7 @@ Daily inventory done✅
                       <i data-lucide="coffee" className="w-5 h-5 text-sky-600"></i>
                       <span>Kebutuhan Bahan Minuman (Hasil Konsolidasi)</span>
                     </h3>
-                    <p className="text-xs text-slate-400">Penggabungan semua resep varian Taro yang terjual hari ini ke satuan KG</p>
+                    <p className="text-xs text-slate-600">Penggabungan semua resep varian Taro yang terjual hari ini ke satuan KG</p>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
@@ -4705,12 +4876,12 @@ Daily inventory done✅
                   <h4 className="text-xs font-extrabold text-purple-800 uppercase tracking-wider border-b border-purple-50 pb-2">Pemantauan Suhu</h4>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">Suhu Freezer (°C)</label>
-                      <input type="number" value={salesData.suhuFreezer} onChange={(e) => setSalesData({ ...salesData, suhuFreezer: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" placeholder="-18" />
+                      <label htmlFor="salesData_suhuFreezer" className="block text-xs font-semibold text-slate-600 mb-1.5">Suhu Freezer (°C)</label>
+                      <input id="salesData_suhuFreezer" type="number" value={salesData.suhuFreezer} onChange={(e) => setSalesData({ ...salesData, suhuFreezer: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" placeholder="-18" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">Suhu Chiller (°C)</label>
-                      <input type="number" value={salesData.suhuChiller} onChange={(e) => setSalesData({ ...salesData, suhuChiller: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" placeholder="2" />
+                      <label htmlFor="salesData_suhuChiller" className="block text-xs font-semibold text-slate-600 mb-1.5">Suhu Chiller (°C)</label>
+                      <input id="salesData_suhuChiller" type="number" value={salesData.suhuChiller} onChange={(e) => setSalesData({ ...salesData, suhuChiller: e.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" placeholder="2" />
                     </div>
                   </div>
                 </div>
@@ -4720,36 +4891,36 @@ Daily inventory done✅
                   <h4 className="text-xs font-extrabold text-purple-800 uppercase tracking-wider border-b border-purple-50 pb-2">Roti Terjual (pcs)</h4>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Original</label>
-                      <input type="number" value={salesData.soldBuns.original} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, original: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_soldBuns_original" className="block text-xs font-semibold text-slate-600 mb-1">Original</label>
+                      <input id="salesData_soldBuns_original" type="number" value={salesData.soldBuns.original} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, original: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Coklat</label>
-                      <input type="number" value={salesData.soldBuns.coklat} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, coklat: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_soldBuns_coklat" className="block text-xs font-semibold text-slate-600 mb-1">Coklat</label>
+                      <input id="salesData_soldBuns_coklat" type="number" value={salesData.soldBuns.coklat} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, coklat: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Vanilla</label>
-                      <input type="number" value={salesData.soldBuns.vanilla} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, vanilla: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_soldBuns_vanilla" className="block text-xs font-semibold text-slate-600 mb-1">Vanilla</label>
+                      <input id="salesData_soldBuns_vanilla" type="number" value={salesData.soldBuns.vanilla} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, vanilla: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Peach</label>
-                      <input type="number" value={salesData.soldBuns.peach} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, peach: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_soldBuns_peach" className="block text-xs font-semibold text-slate-600 mb-1">Peach</label>
+                      <input id="salesData_soldBuns_peach" type="number" value={salesData.soldBuns.peach} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, peach: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Lemon</label>
-                      <input type="number" value={salesData.soldBuns.lemon} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, lemon: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_soldBuns_lemon" className="block text-xs font-semibold text-slate-600 mb-1">Lemon</label>
+                      <input id="salesData_soldBuns_lemon" type="number" value={salesData.soldBuns.lemon} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, lemon: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Raspberry</label>
-                      <input type="number" value={salesData.soldBuns.raspberry} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, raspberry: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_soldBuns_raspberry" className="block text-xs font-semibold text-slate-600 mb-1">Raspberry</label>
+                      <input id="salesData_soldBuns_raspberry" type="number" value={salesData.soldBuns.raspberry} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, raspberry: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Nanas</label>
-                      <input type="number" value={salesData.soldBuns.nanas} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, nanas: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_soldBuns_nanas" className="block text-xs font-semibold text-slate-600 mb-1">Nanas</label>
+                      <input id="salesData_soldBuns_nanas" type="number" value={salesData.soldBuns.nanas} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, nanas: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Family Box (box)</label>
-                      <input type="number" value={salesData.soldBuns.familyBox} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, familyBox: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_soldBuns_familyBox" className="block text-xs font-semibold text-slate-600 mb-1">Family Box (box)</label>
+                      <input id="salesData_soldBuns_familyBox" type="number" value={salesData.soldBuns.familyBox} onChange={(e) => setSalesData({ ...salesData, soldBuns: { ...salesData.soldBuns, familyBox: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div className="bg-purple-50 p-2.5 rounded-lg flex flex-col justify-center border border-purple-100">
                       <span className="text-[10px] text-purple-700 font-bold uppercase tracking-wider">Total Bun Terjual</span>
@@ -4763,20 +4934,20 @@ Daily inventory done✅
                   <h4 className="text-xs font-extrabold text-purple-800 uppercase tracking-wider border-b border-purple-50 pb-2">Minuman (cup)</h4>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Taro Latte</label>
-                      <input type="number" value={salesData.soldBeverages.taroLatte} onChange={(e) => setSalesData({ ...salesData, soldBeverages: { ...salesData.soldBeverages, taroLatte: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_soldBeverages_taroLatte" className="block text-xs font-semibold text-slate-600 mb-1">Taro Latte</label>
+                      <input id="salesData_soldBeverages_taroLatte" type="number" value={salesData.soldBeverages.taroLatte} onChange={(e) => setSalesData({ ...salesData, soldBeverages: { ...salesData.soldBeverages, taroLatte: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Chocolate Iced</label>
-                      <input type="number" value={salesData.soldBeverages.chocolateIced} onChange={(e) => setSalesData({ ...salesData, soldBeverages: { ...salesData.soldBeverages, chocolateIced: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_soldBeverages_chocolateIced" className="block text-xs font-semibold text-slate-600 mb-1">Chocolate Iced</label>
+                      <input id="salesData_soldBeverages_chocolateIced" type="number" value={salesData.soldBeverages.chocolateIced} onChange={(e) => setSalesData({ ...salesData, soldBeverages: { ...salesData.soldBeverages, chocolateIced: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Strawberry Cheese</label>
-                      <input type="number" value={salesData.soldBeverages.taroStrawberryCheese} onChange={(e) => setSalesData({ ...salesData, soldBeverages: { ...salesData.soldBeverages, taroStrawberryCheese: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_soldBeverages_taroStrawberryCheese" className="block text-xs font-semibold text-slate-600 mb-1">Strawberry Cheese</label>
+                      <input id="salesData_soldBeverages_taroStrawberryCheese" type="number" value={salesData.soldBeverages.taroStrawberryCheese} onChange={(e) => setSalesData({ ...salesData, soldBeverages: { ...salesData.soldBeverages, taroStrawberryCheese: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Taro Blueberry</label>
-                      <input type="number" value={salesData.soldBeverages.taroBlueberry} onChange={(e) => setSalesData({ ...salesData, soldBeverages: { ...salesData.soldBeverages, taroBlueberry: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_soldBeverages_taroBlueberry" className="block text-xs font-semibold text-slate-600 mb-1">Taro Blueberry</label>
+                      <input id="salesData_soldBeverages_taroBlueberry" type="number" value={salesData.soldBeverages.taroBlueberry} onChange={(e) => setSalesData({ ...salesData, soldBeverages: { ...salesData.soldBeverages, taroBlueberry: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                   </div>
                 </div>
@@ -4786,32 +4957,32 @@ Daily inventory done✅
                   <h4 className="text-xs font-extrabold text-purple-800 uppercase tracking-wider border-b border-purple-50 pb-2">Financials & Transaksi</h4>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Total Omset (Rp)</label>
-                      <input type="number" value={salesData.financials.value} onChange={(e) => setSalesData({ ...salesData, financials: { ...salesData.financials, value: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_financials_value" className="block text-xs font-semibold text-slate-600 mb-1">Total Omset (Rp)</label>
+                      <input id="salesData_financials_value" type="number" value={salesData.financials.value} onChange={(e) => setSalesData({ ...salesData, financials: { ...salesData.financials, value: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Cash (Rp)</label>
-                      <input type="number" value={salesData.financials.cash} onChange={(e) => setSalesData({ ...salesData, financials: { ...salesData.financials, cash: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_financials_cash" className="block text-xs font-semibold text-slate-600 mb-1">Cash (Rp)</label>
+                      <input id="salesData_financials_cash" type="number" value={salesData.financials.cash} onChange={(e) => setSalesData({ ...salesData, financials: { ...salesData.financials, cash: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">EDC (Rp)</label>
-                      <input type="number" value={salesData.financials.edc} onChange={(e) => setSalesData({ ...salesData, financials: { ...salesData.financials, edc: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_financials_edc" className="block text-xs font-semibold text-slate-600 mb-1">EDC (Rp)</label>
+                      <input id="salesData_financials_edc" type="number" value={salesData.financials.edc} onChange={(e) => setSalesData({ ...salesData, financials: { ...salesData.financials, edc: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Grab (Rp)</label>
-                      <input type="number" value={salesData.financials.grab} onChange={(e) => setSalesData({ ...salesData, financials: { ...salesData.financials, grab: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_financials_grab" className="block text-xs font-semibold text-slate-600 mb-1">Grab (Rp)</label>
+                      <input id="salesData_financials_grab" type="number" value={salesData.financials.grab} onChange={(e) => setSalesData({ ...salesData, financials: { ...salesData.financials, grab: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">ShopeeFood (Rp)</label>
-                      <input type="number" value={salesData.financials.shopeeFood} onChange={(e) => setSalesData({ ...salesData, financials: { ...salesData.financials, shopeeFood: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_financials_shopeeFood" className="block text-xs font-semibold text-slate-600 mb-1">ShopeeFood (Rp)</label>
+                      <input id="salesData_financials_shopeeFood" type="number" value={salesData.financials.shopeeFood} onChange={(e) => setSalesData({ ...salesData, financials: { ...salesData.financials, shopeeFood: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">GoFood (Rp)</label>
-                      <input type="number" value={salesData.financials.goFood} onChange={(e) => setSalesData({ ...salesData, financials: { ...salesData.financials, goFood: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_financials_goFood" className="block text-xs font-semibold text-slate-600 mb-1">GoFood (Rp)</label>
+                      <input id="salesData_financials_goFood" type="number" value={salesData.financials.goFood} onChange={(e) => setSalesData({ ...salesData, financials: { ...salesData.financials, goFood: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Jumlah Transaksi</label>
-                      <input type="number" value={salesData.financials.transaksi} onChange={(e) => setSalesData({ ...salesData, financials: { ...salesData.financials, transaksi: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="salesData_financials_transaksi" className="block text-xs font-semibold text-slate-600 mb-1">Jumlah Transaksi</label>
+                      <input id="salesData_financials_transaksi" type="number" value={salesData.financials.transaksi} onChange={(e) => setSalesData({ ...salesData, financials: { ...salesData.financials, transaksi: e.target.value } })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                   </div>
                 </div>
@@ -4821,24 +4992,25 @@ Daily inventory done✅
                   <h4 className="text-xs font-extrabold text-purple-800 uppercase tracking-wider border-b border-purple-50 pb-2">Waste (pcs)</h4>
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                     <div>
-                      <label className="block text-[10px] font-semibold text-slate-600 mb-1">FD Nempel</label>
-                      <input type="number" value={salesData.waste.fdNempel} onChange={(e) => setSalesData({ ...salesData, waste: { ...salesData.waste, fdNempel: e.target.value } })} className="w-full px-2 py-1.5 border border-slate-300 rounded-lg text-xs" placeholder="0" />
+                      <label htmlFor="salesData_waste_fdNempel" className="block text-[10px] font-semibold text-slate-600 mb-1">FD Nempel</label>
+                      <input id="salesData_waste_fdNempel" type="number" value={salesData.waste.fdNempel} onChange={(e) => setSalesData({ ...salesData, waste: { ...salesData.waste, fdNempel: e.target.value } })} className="w-full px-2 py-1.5 border border-slate-300 rounded-lg text-xs" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-semibold text-slate-600 mb-1">Reject Thaw</label>
-                      <input type="number" value={salesData.waste.bunRejectThawing} onChange={(e) => setSalesData({ ...salesData, waste: { ...salesData.waste, bunRejectThawing: e.target.value } })} className="w-full px-2 py-1.5 border border-slate-300 rounded-lg text-xs" placeholder="0" />
+                      <label htmlFor="salesData_waste_bunRejectThawing" className="block text-[10px] font-semibold text-slate-600 mb-1">Reject Thaw</label>
+                      <input id="salesData_waste_bunRejectThawing" type="number" value={salesData.waste.bunRejectThawing} onChange={(e) => setSalesData({ ...salesData, waste: { ...salesData.waste, bunRejectThawing: e.target.value } })} className="w-full px-2 py-1.5 border border-slate-300 rounded-lg text-xs" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-semibold text-slate-600 mb-1">Dough Pecah</label>
-                      <input type="number" value={salesData.waste.doughPecahProofing} onChange={(e) => setSalesData({ ...salesData, waste: { ...salesData.waste, doughPecahProofing: e.target.value } })} className="w-full px-2 py-1.5 border border-slate-300 rounded-lg text-xs" placeholder="0" />
+                      <label htmlFor="salesData_waste_doughPecahProofing" className="block text-[10px] font-semibold text-slate-600 mb-1">Dough Pecah</label>
+                      <input id="salesData_waste_doughPecahProofing" type="number" value={salesData.waste.doughPecahProofing} onChange={(e) => setSalesData({ ...salesData, waste: { ...salesData.waste, doughPecahProofing: e.target.value } })} className="w-full px-2 py-1.5 border border-slate-300 rounded-lg text-xs" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-semibold text-slate-600 mb-1">Gagal Bake</label>
-                      <input type="number" value={salesData.waste.doughGagalBaking} onChange={(e) => setSalesData({ ...salesData, waste: { ...salesData.waste, doughGagalBaking: e.target.value } })} className="w-full px-2 py-1.5 border border-slate-300 rounded-lg text-xs" placeholder="0" />
+                      <label htmlFor="salesData_waste_doughGagalBaking" className="block text-[10px] font-semibold text-slate-600 mb-1">Gagal Bake</label>
+                      <input id="salesData_waste_doughGagalBaking" type="number" value={salesData.waste.doughGagalBaking} onChange={(e) => setSalesData({ ...salesData, waste: { ...salesData.waste, doughGagalBaking: e.target.value } })} className="w-full px-2 py-1.5 border border-slate-300 rounded-lg text-xs" placeholder="0" />
                     </div>
                     <div className="space-y-2">
-  <label className="block text-xs font-semibold text-slate-600">Waste Bun</label>
+  <label htmlFor="waste-bun" className="block text-xs font-semibold text-slate-600">Waste Bun</label>
   <input 
+    id="waste-bun"
     type="number" 
     value={salesData.waste.wasteBun} 
     onChange={(e) => setSalesData({...salesData, waste: {...salesData.waste, wasteBun: e.target.value}})}
@@ -4847,8 +5019,8 @@ Daily inventory done✅
   />
 </div>
                     <div>
-                      <label className="block text-[10px] font-semibold text-slate-600 mb-1">Roti Matang</label>
-                      <input type="number" value={salesData.waste.rotiMatang} onChange={(e) => setSalesData({ ...salesData, waste: { ...salesData.waste, rotiMatang: e.target.value } })} className="w-full px-2 py-1.5 border border-slate-300 rounded-lg text-xs" placeholder="0" />
+                      <label htmlFor="salesData_waste_rotiMatang" className="block text-[10px] font-semibold text-slate-600 mb-1">Roti Matang</label>
+                      <input id="salesData_waste_rotiMatang" type="number" value={salesData.waste.rotiMatang} onChange={(e) => setSalesData({ ...salesData, waste: { ...salesData.waste, rotiMatang: e.target.value } })} className="w-full px-2 py-1.5 border border-slate-300 rounded-lg text-xs" placeholder="0" />
                     </div>
                   </div>
                 </div>
@@ -4860,8 +5032,9 @@ Daily inventory done✅
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                       {customSalesFields.map(f => (
                         <div key={f.id}>
-                          <label className="block text-[10px] font-semibold text-slate-600 mb-1">{f.label}{f.unit ? ` (${f.unit})` : ''}</label>
+                          <label htmlFor={`custom-field-${f.id}`} className="block text-[10px] font-semibold text-slate-600 mb-1">{f.label}{f.unit ? ` (${f.unit})` : ''}</label>
                           <input
+                            id={`custom-field-${f.id}`}
                             type={f.type === 'text' ? 'text' : 'number'}
                             value={(salesData.custom || {})[f.id] || ''}
                             onChange={(e) => setSalesData({ ...salesData, custom: { ...(salesData.custom || {}), [f.id]: e.target.value } })}
@@ -4904,42 +5077,43 @@ Daily inventory done✅
                   <h4 className="text-xs font-extrabold text-indigo-700 uppercase tracking-wider border-b border-indigo-50 pb-2">Frozen Dough & Fillings</h4>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Frozen Dough (pcs)</label>
-                      <input type="number" value={inventoryData.frozenDough} onChange={(e) => setInventoryData({ ...inventoryData, frozenDough: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_frozenDough" className="block text-xs font-semibold text-slate-600 mb-1">Frozen Dough (pcs)</label>
+                      <input id="inventoryData_frozenDough" type="number" value={inventoryData.frozenDough} onChange={(e) => setInventoryData({ ...inventoryData, frozenDough: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-purple-700 mb-1 font-bold">Topping Taro (pcs)</label>
-                      <input type="number" value={inventoryData.toppingTaro} onChange={(e) => setInventoryData({ ...inventoryData, toppingTaro: e.target.value })} className="w-full px-3 py-1.5 border border-purple-200 bg-purple-50/10 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_toppingTaro" className="block text-xs font-semibold text-purple-700 mb-1 font-bold">Topping Taro (pcs)</label>
+                      <input id="inventoryData_toppingTaro" type="number" value={inventoryData.toppingTaro} onChange={(e) => setInventoryData({ ...inventoryData, toppingTaro: e.target.value })} className="w-full px-3 py-1.5 border border-purple-200 bg-purple-50/10 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Filling Coklat (pcs)</label>
-                      <input type="number" value={inventoryData.fillingCoklat} onChange={(e) => setInventoryData({ ...inventoryData, fillingCoklat: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_fillingCoklat" className="block text-xs font-semibold text-slate-600 mb-1">Filling Coklat (pcs)</label>
+                      <input id="inventoryData_fillingCoklat" type="number" value={inventoryData.fillingCoklat} onChange={(e) => setInventoryData({ ...inventoryData, fillingCoklat: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Filling Vanilla (pcs)</label>
-                      <input type="number" value={inventoryData.fillingVanilla} onChange={(e) => setInventoryData({ ...inventoryData, fillingVanilla: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_fillingVanilla" className="block text-xs font-semibold text-slate-600 mb-1">Filling Vanilla (pcs)</label>
+                      <input id="inventoryData_fillingVanilla" type="number" value={inventoryData.fillingVanilla} onChange={(e) => setInventoryData({ ...inventoryData, fillingVanilla: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Filling Lemon (pcs)</label>
-                      <input type="number" value={inventoryData.fillingLemon} onChange={(e) => setInventoryData({ ...inventoryData, fillingLemon: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_fillingLemon" className="block text-xs font-semibold text-slate-600 mb-1">Filling Lemon (pcs)</label>
+                      <input id="inventoryData_fillingLemon" type="number" value={inventoryData.fillingLemon} onChange={(e) => setInventoryData({ ...inventoryData, fillingLemon: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Filling Peach (pcs)</label>
-                      <input type="number" value={inventoryData.fillingPeach} onChange={(e) => setInventoryData({ ...inventoryData, fillingPeach: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_fillingPeach" className="block text-xs font-semibold text-slate-600 mb-1">Filling Peach (pcs)</label>
+                      <input id="inventoryData_fillingPeach" type="number" value={inventoryData.fillingPeach} onChange={(e) => setInventoryData({ ...inventoryData, fillingPeach: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Filling Raspberry (pcs)</label>
-                      <input type="number" value={inventoryData.fillingRaspberry} onChange={(e) => setInventoryData({ ...inventoryData, fillingRaspberry: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_fillingRaspberry" className="block text-xs font-semibold text-slate-600 mb-1">Filling Raspberry (pcs)</label>
+                      <input id="inventoryData_fillingRaspberry" type="number" value={inventoryData.fillingRaspberry} onChange={(e) => setInventoryData({ ...inventoryData, fillingRaspberry: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Filling Nanas (pcs)</label>
-                      <input type="number" value={inventoryData.fillingNanas} onChange={(e) => setInventoryData({ ...inventoryData, fillingNanas: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_fillingNanas" className="block text-xs font-semibold text-slate-600 mb-1">Filling Nanas (pcs)</label>
+                      <input id="inventoryData_fillingNanas" type="number" value={inventoryData.fillingNanas} onChange={(e) => setInventoryData({ ...inventoryData, fillingNanas: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     {/* Field Tambahan dari Admin khusus bagian Frozen Dough & Fillings */}
                     {customInventoryFields.filter(f => f.section === 'dough').map(f => (
                       <div key={f.id}>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">{f.label}{f.unit ? ` (${f.unit})` : ''}</label>
+                        <label htmlFor={`custom-field-${f.id}`} className="block text-xs font-semibold text-slate-600 mb-1">{f.label}{f.unit ? ` (${f.unit})` : ''}</label>
                         <input
+                          id={`custom-field-${f.id}`}
                           type={f.type === 'text' ? 'text' : 'number'}
                           value={(inventoryData.custom || {})[f.id] || ''}
                           onChange={(e) => setInventoryData({ ...inventoryData, custom: { ...(inventoryData.custom || {}), [f.id]: e.target.value } })}
@@ -4956,46 +5130,47 @@ Daily inventory done✅
                   <h4 className="text-xs font-extrabold text-indigo-700 uppercase tracking-wider border-b border-indigo-50 pb-2">Ingredients & Powder</h4>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">UHT (pcs)</label>
-                      <input type="number" value={inventoryData.uht} onChange={(e) => setInventoryData({ ...inventoryData, uht: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_uht" className="block text-xs font-semibold text-slate-600 mb-1">UHT (pcs)</label>
+                      <input id="inventoryData_uht" type="number" value={inventoryData.uht} onChange={(e) => setInventoryData({ ...inventoryData, uht: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Taro Powder (kg)</label>
-                      <input type="number" step="0.1" value={inventoryData.taroPowder} onChange={(e) => setInventoryData({ ...inventoryData, taroPowder: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_taroPowder" className="block text-xs font-semibold text-slate-600 mb-1">Taro Powder (kg)</label>
+                      <input id="inventoryData_taroPowder" type="number" step="0.1" value={inventoryData.taroPowder} onChange={(e) => setInventoryData({ ...inventoryData, taroPowder: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Coklat Powder (pack)</label>
-                      <input type="number" value={inventoryData.coklatPowder} onChange={(e) => setInventoryData({ ...inventoryData, coklatPowder: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_coklatPowder" className="block text-xs font-semibold text-slate-600 mb-1">Coklat Powder (pack)</label>
+                      <input id="inventoryData_coklatPowder" type="number" value={inventoryData.coklatPowder} onChange={(e) => setInventoryData({ ...inventoryData, coklatPowder: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Whipping Cream (pk)</label>
-                      <input type="number" value={inventoryData.whippingCream} onChange={(e) => setInventoryData({ ...inventoryData, whippingCream: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_whippingCream" className="block text-xs font-semibold text-slate-600 mb-1">Whipping Cream (pk)</label>
+                      <input id="inventoryData_whippingCream" type="number" value={inventoryData.whippingCream} onChange={(e) => setInventoryData({ ...inventoryData, whippingCream: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">NDC Powder (pack)</label>
-                      <input type="number" value={inventoryData.ndcPowder} onChange={(e) => setInventoryData({ ...inventoryData, ndcPowder: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_ndcPowder" className="block text-xs font-semibold text-slate-600 mb-1">NDC Powder (pack)</label>
+                      <input id="inventoryData_ndcPowder" type="number" value={inventoryData.ndcPowder} onChange={(e) => setInventoryData({ ...inventoryData, ndcPowder: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Cheese Powder (pk)</label>
-                      <input type="number" value={inventoryData.cheesePowder} onChange={(e) => setInventoryData({ ...inventoryData, cheesePowder: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_cheesePowder" className="block text-xs font-semibold text-slate-600 mb-1">Cheese Powder (pk)</label>
+                      <input id="inventoryData_cheesePowder" type="number" value={inventoryData.cheesePowder} onChange={(e) => setInventoryData({ ...inventoryData, cheesePowder: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Strawberry Kons (kg)</label>
-                      <input type="number" value={inventoryData.strawberryKonsentrat} onChange={(e) => setInventoryData({ ...inventoryData, strawberryKonsentrat: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_strawberryKonsentrat" className="block text-xs font-semibold text-slate-600 mb-1">Strawberry Kons (kg)</label>
+                      <input id="inventoryData_strawberryKonsentrat" type="number" value={inventoryData.strawberryKonsentrat} onChange={(e) => setInventoryData({ ...inventoryData, strawberryKonsentrat: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Strawberry Syrup (btl)</label>
-                      <input type="number" value={inventoryData.strawberrySyrup} onChange={(e) => setInventoryData({ ...inventoryData, strawberrySyrup: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_strawberrySyrup" className="block text-xs font-semibold text-slate-600 mb-1">Strawberry Syrup (btl)</label>
+                      <input id="inventoryData_strawberrySyrup" type="number" value={inventoryData.strawberrySyrup} onChange={(e) => setInventoryData({ ...inventoryData, strawberrySyrup: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Blueberry Kons (pk)</label>
-                      <input type="number" value={inventoryData.blueberryKonsentrat} onChange={(e) => setInventoryData({ ...inventoryData, blueberryKonsentrat: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
+                      <label htmlFor="inventoryData_blueberryKonsentrat" className="block text-xs font-semibold text-slate-600 mb-1">Blueberry Kons (pk)</label>
+                      <input id="inventoryData_blueberryKonsentrat" type="number" value={inventoryData.blueberryKonsentrat} onChange={(e) => setInventoryData({ ...inventoryData, blueberryKonsentrat: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm" placeholder="0" />
                     </div>
                     {/* Field Tambahan dari Admin khusus bagian Ingredients & Powder */}
                     {customInventoryFields.filter(f => f.section === 'ingredients').map(f => (
                       <div key={f.id}>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">{f.label}{f.unit ? ` (${f.unit})` : ''}</label>
+                        <label htmlFor={`custom-field-${f.id}`} className="block text-xs font-semibold text-slate-600 mb-1">{f.label}{f.unit ? ` (${f.unit})` : ''}</label>
                         <input
+                          id={`custom-field-${f.id}`}
                           type={f.type === 'text' ? 'text' : 'number'}
                           value={(inventoryData.custom || {})[f.id] || ''}
                           onChange={(e) => setInventoryData({ ...inventoryData, custom: { ...(inventoryData.custom || {}), [f.id]: e.target.value } })}
@@ -5012,86 +5187,87 @@ Daily inventory done✅
                   <h4 className="text-xs font-extrabold text-indigo-700 uppercase tracking-wider border-b border-indigo-50 pb-2">Packaging & Operations</h4>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
                     <div>
-                      <label className="block text-slate-600 mb-1">Paper Pouch (pcs)</label>
-                      <input type="number" value={inventoryData.paperPouch} onChange={(e) => setInventoryData({ ...inventoryData, paperPouch: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_paperPouch" className="block text-slate-600 mb-1">Paper Pouch (pcs)</label>
+                      <input id="inventoryData_paperPouch" type="number" value={inventoryData.paperPouch} onChange={(e) => setInventoryData({ ...inventoryData, paperPouch: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Family Pack (pcs)</label>
-                      <input type="number" value={inventoryData.familyPack} onChange={(e) => setInventoryData({ ...inventoryData, familyPack: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_familyPack" className="block text-slate-600 mb-1">Family Pack (pcs)</label>
+                      <input id="inventoryData_familyPack" type="number" value={inventoryData.familyPack} onChange={(e) => setInventoryData({ ...inventoryData, familyPack: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Plastik UK 20 (pack)</label>
-                      <input type="number" value={inventoryData.plastik20} onChange={(e) => setInventoryData({ ...inventoryData, plastik20: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_plastik20" className="block text-slate-600 mb-1">Plastik UK 20 (pack)</label>
+                      <input id="inventoryData_plastik20" type="number" value={inventoryData.plastik20} onChange={(e) => setInventoryData({ ...inventoryData, plastik20: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Plastik UK 25 (pack)</label>
-                      <input type="number" value={inventoryData.plastik25} onChange={(e) => setInventoryData({ ...inventoryData, plastik25: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_plastik25" className="block text-slate-600 mb-1">Plastik UK 25 (pack)</label>
+                      <input id="inventoryData_plastik25" type="number" value={inventoryData.plastik25} onChange={(e) => setInventoryData({ ...inventoryData, plastik25: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Plastik UK 35 (pack)</label>
-                      <input type="number" value={inventoryData.plastik35} onChange={(e) => setInventoryData({ ...inventoryData, plastik35: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_plastik35" className="block text-slate-600 mb-1">Plastik UK 35 (pack)</label>
+                      <input id="inventoryData_plastik35" type="number" value={inventoryData.plastik35} onChange={(e) => setInventoryData({ ...inventoryData, plastik35: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Cupbler 22 Oz (pcs)</label>
-                      <input type="number" value={inventoryData.cupbler22} onChange={(e) => setInventoryData({ ...inventoryData, cupbler22: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_cupbler22" className="block text-slate-600 mb-1">Cupbler 22 Oz (pcs)</label>
+                      <input id="inventoryData_cupbler22" type="number" value={inventoryData.cupbler22} onChange={(e) => setInventoryData({ ...inventoryData, cupbler22: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Cuplid 22 Oz (pcs)</label>
-                      <input type="number" value={inventoryData.cuplid22} onChange={(e) => setInventoryData({ ...inventoryData, cuplid22: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_cuplid22" className="block text-slate-600 mb-1">Cuplid 22 Oz (pcs)</label>
+                      <input id="inventoryData_cuplid22" type="number" value={inventoryData.cuplid22} onChange={(e) => setInventoryData({ ...inventoryData, cuplid22: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Cup Tray S (pcs)</label>
-                      <input type="number" value={inventoryData.cupTrayS} onChange={(e) => setInventoryData({ ...inventoryData, cupTrayS: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_cupTrayS" className="block text-slate-600 mb-1">Cup Tray S (pcs)</label>
+                      <input id="inventoryData_cupTrayS" type="number" value={inventoryData.cupTrayS} onChange={(e) => setInventoryData({ ...inventoryData, cupTrayS: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Cup Tray M (pcs)</label>
-                      <input type="number" value={inventoryData.cupTrayM} onChange={(e) => setInventoryData({ ...inventoryData, cupTrayM: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_cupTrayM" className="block text-slate-600 mb-1">Cup Tray M (pcs)</label>
+                      <input id="inventoryData_cupTrayM" type="number" value={inventoryData.cupTrayM} onChange={(e) => setInventoryData({ ...inventoryData, cupTrayM: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Gloves M (pack)</label>
-                      <input type="number" value={inventoryData.glovesM} onChange={(e) => setInventoryData({ ...inventoryData, glovesM: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_glovesM" className="block text-slate-600 mb-1">Gloves M (pack)</label>
+                      <input id="inventoryData_glovesM" type="number" value={inventoryData.glovesM} onChange={(e) => setInventoryData({ ...inventoryData, glovesM: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Gloves L (pack)</label>
-                      <input type="number" value={inventoryData.glovesL} onChange={(e) => setInventoryData({ ...inventoryData, glovesL: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_glovesL" className="block text-slate-600 mb-1">Gloves L (pack)</label>
+                      <input id="inventoryData_glovesL" type="number" value={inventoryData.glovesL} onChange={(e) => setInventoryData({ ...inventoryData, glovesL: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Gloves XL (pack)</label>
-                      <input type="number" value={inventoryData.glovesXL} onChange={(e) => setInventoryData({ ...inventoryData, glovesXL: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_glovesXL" className="block text-slate-600 mb-1">Gloves XL (pack)</label>
+                      <input id="inventoryData_glovesXL" type="number" value={inventoryData.glovesXL} onChange={(e) => setInventoryData({ ...inventoryData, glovesXL: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Trash Bag (pack)</label>
-                      <input type="number" value={inventoryData.trashBag} onChange={(e) => setInventoryData({ ...inventoryData, trashBag: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_trashBag" className="block text-slate-600 mb-1">Trash Bag (pack)</label>
+                      <input id="inventoryData_trashBag" type="number" value={inventoryData.trashBag} onChange={(e) => setInventoryData({ ...inventoryData, trashBag: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Thermal Paper (pcs)</label>
-                      <input type="number" value={inventoryData.thermalPaper} onChange={(e) => setInventoryData({ ...inventoryData, thermalPaper: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_thermalPaper" className="block text-slate-600 mb-1">Thermal Paper (pcs)</label>
+                      <input id="inventoryData_thermalPaper" type="number" value={inventoryData.thermalPaper} onChange={(e) => setInventoryData({ ...inventoryData, thermalPaper: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Kuraflex Hijau (pack)</label>
-                      <input type="number" value={inventoryData.kuraflexHijau} onChange={(e) => setInventoryData({ ...inventoryData, kuraflexHijau: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_kuraflexHijau" className="block text-slate-600 mb-1">Kuraflex Hijau (pack)</label>
+                      <input id="inventoryData_kuraflexHijau" type="number" value={inventoryData.kuraflexHijau} onChange={(e) => setInventoryData({ ...inventoryData, kuraflexHijau: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Kuraflex Pink (pack)</label>
-                      <input type="number" value={inventoryData.kuraflexPink} onChange={(e) => setInventoryData({ ...inventoryData, kuraflexPink: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_kuraflexPink" className="block text-slate-600 mb-1">Kuraflex Pink (pack)</label>
+                      <input id="inventoryData_kuraflexPink" type="number" value={inventoryData.kuraflexPink} onChange={(e) => setInventoryData({ ...inventoryData, kuraflexPink: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Kitchen Mask (pack)</label>
-                      <input type="number" value={inventoryData.kitchenMask} onChange={(e) => setInventoryData({ ...inventoryData, kitchenMask: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_kitchenMask" className="block text-slate-600 mb-1">Kitchen Mask (pack)</label>
+                      <input id="inventoryData_kitchenMask" type="number" value={inventoryData.kitchenMask} onChange={(e) => setInventoryData({ ...inventoryData, kitchenMask: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Tisu Kecil (pack)</label>
-                      <input type="number" value={inventoryData.tisuKecil} onChange={(e) => setInventoryData({ ...inventoryData, tisuKecil: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_tisuKecil" className="block text-slate-600 mb-1">Tisu Kecil (pack)</label>
+                      <input id="inventoryData_tisuKecil" type="number" value={inventoryData.tisuKecil} onChange={(e) => setInventoryData({ ...inventoryData, tisuKecil: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     <div>
-                      <label className="block text-slate-600 mb-1">Tisu Besar (pack)</label>
-                      <input type="number" value={inventoryData.tisuBesar} onChange={(e) => setInventoryData({ ...inventoryData, tisuBesar: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
+                      <label htmlFor="inventoryData_tisuBesar" className="block text-slate-600 mb-1">Tisu Besar (pack)</label>
+                      <input id="inventoryData_tisuBesar" type="number" value={inventoryData.tisuBesar} onChange={(e) => setInventoryData({ ...inventoryData, tisuBesar: e.target.value })} className="w-full px-3 py-1.5 border border-slate-300 rounded-lg" placeholder="0" />
                     </div>
                     {/* Field Tambahan dari Admin khusus bagian Packaging & Operations */}
                     {customInventoryFields.filter(f => f.section === 'packaging').map(f => (
                       <div key={f.id}>
-                        <label className="block text-slate-600 mb-1">{f.label}{f.unit ? ` (${f.unit})` : ''}</label>
+                        <label htmlFor={`custom-field-${f.id}`} className="block text-slate-600 mb-1">{f.label}{f.unit ? ` (${f.unit})` : ''}</label>
                         <input
+                          id={`custom-field-${f.id}`}
                           type={f.type === 'text' ? 'text' : 'number'}
                           value={(inventoryData.custom || {})[f.id] || ''}
                           onChange={(e) => setInventoryData({ ...inventoryData, custom: { ...(inventoryData.custom || {}), [f.id]: e.target.value } })}
@@ -5111,8 +5287,9 @@ Daily inventory done✅
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
                       {customInventoryFields.filter(f => !f.section || f.section === 'lainnya').map(f => (
                         <div key={f.id}>
-                          <label className="block text-slate-600 mb-1">{f.label}{f.unit ? ` (${f.unit})` : ''}</label>
+                          <label htmlFor={`custom-field-${f.id}`} className="block text-slate-600 mb-1">{f.label}{f.unit ? ` (${f.unit})` : ''}</label>
                           <input
+                            id={`custom-field-${f.id}`}
                             type={f.type === 'text' ? 'text' : 'number'}
                             value={(inventoryData.custom || {})[f.id] || ''}
                             onChange={(e) => setInventoryData({ ...inventoryData, custom: { ...(inventoryData.custom || {}), [f.id]: e.target.value } })}
@@ -5155,8 +5332,9 @@ Daily inventory done✅
                   {/* Tanggal & No Surat Jalan */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">Tanggal Kedatangan</label>
+                      <label htmlFor="tanggal-kedatangan" className="block text-xs font-semibold text-slate-600 mb-1.5">Tanggal Kedatangan</label>
                       <input
+                        id="tanggal-kedatangan"
                         type="date"
                         value={kedatanganForm.tanggal}
                         onChange={(e) => setKedatanganForm({ ...kedatanganForm, tanggal: e.target.value })}
@@ -5164,8 +5342,9 @@ Daily inventory done✅
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-purple-700 mb-1.5">No. Faktur / Surat Jalan (Kop Khusus)</label>
+                      <label htmlFor="no--faktur---surat-jalan--kop-khusus" className="block text-xs font-semibold text-purple-700 mb-1.5">No. Faktur / Surat Jalan (Kop Khusus)</label>
                       <input
+                        id="no--faktur---surat-jalan--kop-khusus"
                         type="text"
                         value={kedatanganForm.noSuratJalan}
                         onChange={(e) => setKedatanganForm({ ...kedatanganForm, noSuratJalan: e.target.value })}
@@ -5186,8 +5365,9 @@ Daily inventory done✅
                         const khususVal = getKhususItemValue(kedatanganForm.items, item.key);
                         return (
                           <div key={item.key} className="bg-purple-50/30 border border-purple-100 rounded-xl p-3 space-y-2">
-                            <label className="block text-xs font-bold text-slate-700">{item.label} <span className="text-slate-400 font-normal">({item.unit})</span></label>
+                            <label htmlFor={`item-field-${item.key}`} className="block text-xs font-bold text-slate-700">{item.label} <span className="text-slate-600 font-normal">({item.unit})</span></label>
                             <input
+                              id={`item-field-${item.key}`}
                               type="number"
                               value={khususVal.jumlah}
                               onChange={(e) => handleKedatanganKhususChange(item.key, 'jumlah', e.target.value)}
@@ -5195,8 +5375,9 @@ Daily inventory done✅
                               placeholder="Jumlah"
                             />
                             <div>
-                              <label className="block text-[10px] font-semibold text-purple-600 mb-0.5">Tanggal Produksi</label>
+                              <label htmlFor="tanggal-produksi" className="block text-[10px] font-semibold text-purple-600 mb-0.5">Tanggal Produksi</label>
                               <input
+                                id="tanggal-produksi"
                                 type="text"
                                 value={khususVal.tanggalProduksi}
                                 onChange={(e) => handleKedatanganKhususChange(item.key, 'tanggalProduksi', e.target.value)}
@@ -5219,8 +5400,9 @@ Daily inventory done✅
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                       {KEDATANGAN_BARANG_UMUM_ITEMS.map(item => (
                         <div key={item.key}>
-                          <label className="block text-xs font-semibold text-slate-600 mb-1">{item.label} ({item.unit})</label>
+                          <label htmlFor={`item-field-${item.key}`} className="block text-xs font-semibold text-slate-600 mb-1">{item.label} ({item.unit})</label>
                           <input
+                            id={`item-field-${item.key}`}
                             type="number"
                             value={kedatanganForm.items[item.key] || ''}
                             onChange={(e) => handleKedatanganItemChange(item.key, e.target.value)}
@@ -5238,7 +5420,7 @@ Daily inventory done✅
                       <i data-lucide="package-x" className="w-3.5 h-3.5"></i>
                       <span>Barang Tidak Sesuai Faktur/Surat Jalan</span>
                     </h4>
-                    <p className="text-[11px] text-slate-400">Untuk barang yang tertulis di faktur tapi tidak datang, atau datang tidak sesuai jumlah/jenis.</p>
+                    <p className="text-[11px] text-slate-600">Untuk barang yang tertulis di faktur tapi tidak datang, atau datang tidak sesuai jumlah/jenis.</p>
 
                     <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 bg-rose-50/40 border border-rose-100 rounded-xl p-3">
                       <input
@@ -5327,8 +5509,8 @@ Daily inventory done✅
                   </div>
 
                   {kedatanganHistoryList.length === 0 ? (
-                    <div className="text-center py-10 text-slate-400">
-                      <i data-lucide="truck" className="w-10 h-10 mx-auto mb-2 text-slate-300"></i>
+                    <div className="text-center py-10 text-slate-600">
+                      <i data-lucide="truck" className="w-10 h-10 mx-auto mb-2 text-slate-600"></i>
                       <p className="text-sm font-medium">Belum ada riwayat kedatangan barang.</p>
                     </div>
                   ) : (
@@ -5343,7 +5525,7 @@ Daily inventory done✅
                           <div key={item.firebaseKey} className="py-3 flex justify-between items-center gap-2">
                             <div className="min-w-0">
                               <h4 className="font-bold text-slate-700 text-sm">{formatIndonesianDate(item.tanggal)}</h4>
-                              <p className="text-xs text-slate-400 truncate">
+                              <p className="text-xs text-slate-600 truncate">
                                 {itemCount} jenis barang{item.noSuratJalan ? ` · SJ: ${item.noSuratJalan}` : ''}
                                 {tidakSesuaiCount > 0 && <span className="text-rose-500 font-semibold"> · {tidakSesuaiCount} tidak sesuai</span>}
                               </p>
@@ -5375,8 +5557,9 @@ Daily inventory done✅
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">Store</label>
+                      <label htmlFor="store" className="block text-xs font-semibold text-slate-600 mb-1.5">Store</label>
                       <input
+                        id="store"
                         type="text"
                         value={suhuForm.store}
                         onChange={(e) => setSuhuForm({ ...suhuForm, store: e.target.value })}
@@ -5385,8 +5568,9 @@ Daily inventory done✅
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">Tipe Store</label>
+                      <label htmlFor="tipe-store" className="block text-xs font-semibold text-slate-600 mb-1.5">Tipe Store</label>
                       <input
+                        id="tipe-store"
                         type="text"
                         list="tipe-store-options"
                         value={suhuForm.tipeStore}
@@ -5401,8 +5585,9 @@ Daily inventory done✅
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">Diukur Setelah (menit)</label>
+                    <label htmlFor="diukur-setelah--menit" className="block text-xs font-semibold text-slate-600 mb-1.5">Diukur Setelah (menit)</label>
                     <input
+                      id="diukur-setelah--menit"
                       type="number"
                       value={suhuForm.menit}
                       onChange={(e) => setSuhuForm({ ...suhuForm, menit: e.target.value })}
@@ -5413,8 +5598,9 @@ Daily inventory done✅
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">Suhu Bag Luar (°C)</label>
+                      <label htmlFor="suhu-bag-luar---c" className="block text-xs font-semibold text-slate-600 mb-1.5">Suhu Bag Luar (°C)</label>
                       <input
+                        id="suhu-bag-luar---c"
                         type="number"
                         step="0.1"
                         value={suhuForm.suhuLuar}
@@ -5424,8 +5610,9 @@ Daily inventory done✅
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">Suhu Bag Dalam (°C)</label>
+                      <label htmlFor="suhu-bag-dalam---c" className="block text-xs font-semibold text-slate-600 mb-1.5">Suhu Bag Dalam (°C)</label>
                       <input
+                        id="suhu-bag-dalam---c"
                         type="number"
                         step="0.1"
                         value={suhuForm.suhuDalam}
@@ -5435,8 +5622,9 @@ Daily inventory done✅
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">Suhu Ruangan (°C)</label>
+                      <label htmlFor="suhu-ruangan---c" className="block text-xs font-semibold text-slate-600 mb-1.5">Suhu Ruangan (°C)</label>
                       <input
+                        id="suhu-ruangan---c"
                         type="number"
                         step="0.1"
                         value={suhuForm.suhuRuangan}
@@ -5493,7 +5681,7 @@ Daily inventory done✅
                       <i data-lucide={isSendingSuhu ? 'loader' : 'send'} className={`w-4 h-4 ${isSendingSuhu ? 'animate-spin' : ''}`}></i>
                       <span>{isSendingSuhu ? 'Mengirim...' : 'Kirim Laporan Suhu'}</span>
                     </button>
-                    <p className="text-[11px] text-slate-400 text-center mt-2">Foto akan digabung otomatis jadi 1 kolase + keterangan lalu dikirim ke Telegram, dan tersimpan ke Riwayat.</p>
+                    <p className="text-[11px] text-slate-600 text-center mt-2">Foto akan digabung otomatis jadi 1 kolase + keterangan lalu dikirim ke Telegram, dan tersimpan ke Riwayat.</p>
                   </div>
                 </div>
 
@@ -5543,15 +5731,15 @@ Daily inventory done✅
                   </div>
 
                   {suhuReportListForViewDate.length === 0 ? (
-                    <p className="text-xs text-slate-400 text-center py-8">Belum ada laporan suhu untuk tanggal {formatIndonesianDate(suhuViewDate)}.</p>
+                    <p className="text-xs text-slate-600 text-center py-8">Belum ada laporan suhu untuk tanggal {formatIndonesianDate(suhuViewDate)}.</p>
                   ) : (
                     <div className="space-y-4">
                       {suhuReportListForViewDate.map(item => (
                         <div key={item.firebaseKey} className="rounded-xl border border-slate-200 p-4 bg-slate-50/40">
                           <div className="flex justify-between items-start gap-2 mb-3">
                             <div>
-                              <p className="font-bold text-sm text-slate-800">{item.store} <span className="font-normal text-slate-400">• {item.tipeStore}</span></p>
-                              <p className="text-[10px] text-slate-400">{new Date(item.createdAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB</p>
+                              <p className="font-bold text-sm text-slate-800">{item.store} <span className="font-normal text-slate-600">• {item.tipeStore}</span></p>
+                              <p className="text-[10px] text-slate-600">{new Date(item.createdAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB</p>
                             </div>
                             <div className="flex items-center gap-1.5 shrink-0">
                               <button onClick={() => handleResendSuhuReport(item)} className="text-sky-600 hover:bg-sky-50 p-1.5 rounded-lg border border-sky-100" title="Kirim ke Telegram">
@@ -5565,15 +5753,15 @@ Daily inventory done✅
 
                           <div className="grid grid-cols-3 gap-2 mb-3">
                             <div className="bg-white rounded-lg border border-slate-200 p-2 text-center">
-                              <p className="text-[9px] text-slate-400">Bag Luar ({item.menit}mnt)</p>
+                              <p className="text-[9px] text-slate-600">Bag Luar ({item.menit}mnt)</p>
                               <p className="font-bold text-sm text-slate-700">{item.suhuLuar}°C</p>
                             </div>
                             <div className="bg-white rounded-lg border border-slate-200 p-2 text-center">
-                              <p className="text-[9px] text-slate-400">Bag Dalam ({item.menit}mnt)</p>
+                              <p className="text-[9px] text-slate-600">Bag Dalam ({item.menit}mnt)</p>
                               <p className="font-bold text-sm text-slate-700">{item.suhuDalam}°C</p>
                             </div>
                             <div className="bg-white rounded-lg border border-slate-200 p-2 text-center">
-                              <p className="text-[9px] text-slate-400">Ruangan</p>
+                              <p className="text-[9px] text-slate-600">Ruangan</p>
                               <p className="font-bold text-sm text-slate-700">{item.suhuRuangan}°C</p>
                             </div>
                           </div>
@@ -5583,7 +5771,7 @@ Daily inventory done✅
                               {item.fotos.map((f, idx) => (
                                 <div key={idx}>
                                   <img src={f.foto} alt={`Foto ${idx + 1}`} className="w-full h-16 object-cover rounded-lg border border-slate-200" />
-                                  <p className="text-[9px] text-slate-400 text-center mt-0.5">{new Date(f.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</p>
+                                  <p className="text-[9px] text-slate-600 text-center mt-0.5">{new Date(f.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</p>
                                 </div>
                               ))}
                             </div>
@@ -5632,8 +5820,9 @@ Daily inventory done✅
                   {/* Jumlah & Keterangan */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">Jumlah (pcs)</label>
+                      <label htmlFor="jumlah--pcs" className="block text-xs font-semibold text-slate-600 mb-1.5">Jumlah (pcs)</label>
                       <input
+                        id="jumlah--pcs"
                         type="number"
                         value={wasteFotoForm.jumlah}
                         onChange={(e) => setWasteFotoForm({ ...wasteFotoForm, jumlah: e.target.value })}
@@ -5642,8 +5831,9 @@ Daily inventory done✅
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">Keterangan</label>
+                      <label htmlFor="keterangan" className="block text-xs font-semibold text-slate-600 mb-1.5">Keterangan</label>
                       <input
+                        id="keterangan"
                         type="text"
                         value={wasteFotoForm.keterangan}
                         onChange={(e) => setWasteFotoForm({ ...wasteFotoForm, keterangan: e.target.value })}
@@ -5707,7 +5897,7 @@ Daily inventory done✅
                       <span>Kirim Telegram</span>
                     </button>
                   </div>
-                  <p className="text-[11px] text-slate-400 text-center">Setelah disimpan, form akan kosong otomatis agar bisa langsung input foto berikutnya.</p>
+                  <p className="text-[11px] text-slate-600 text-center">Setelah disimpan, form akan kosong otomatis agar bisa langsung input foto berikutnya.</p>
                 </div>
 
                 {/* Rekap Total Per Kategori */}
@@ -5790,7 +5980,7 @@ Daily inventory done✅
                         </div>
 
                         {group.items.length === 0 ? (
-                          <p className="text-xs text-slate-400 text-center py-4">Belum ada foto pada kategori ini untuk tanggal {formatIndonesianDate(wasteFotoViewDate)}.</p>
+                          <p className="text-xs text-slate-600 text-center py-4">Belum ada foto pada kategori ini untuk tanggal {formatIndonesianDate(wasteFotoViewDate)}.</p>
                         ) : (
                           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
                             {group.items.map(item => (
@@ -5799,7 +5989,7 @@ Daily inventory done✅
                                 <div className="p-2 space-y-0.5">
                                   <p className="text-xs font-bold text-slate-700">{item.jumlah} pcs</p>
                                   <p className="text-[10px] text-slate-500 line-clamp-2">{item.keterangan || '-'}</p>
-                                  <p className="text-[9px] text-slate-400">{formatIndonesianDate(item.tanggal)}</p>
+                                  <p className="text-[9px] text-slate-600">{formatIndonesianDate(item.tanggal)}</p>
                                   <div className="flex items-center justify-between pt-1">
                                     <button onClick={() => handleSendSingleWasteFotoToTelegram(item)} className="text-sky-600 hover:bg-sky-50 p-1 rounded-md" title="Kirim ke Telegram">
                                       <i data-lucide="send" className="w-3.5 h-3.5"></i>
@@ -5835,8 +6025,8 @@ Daily inventory done✅
                 </div>
 
                 {historyList.length === 0 ? (
-                  <div className="text-center py-12 text-slate-400">
-                    <i data-lucide="history" className="w-12 h-12 mx-auto mb-2 text-slate-300"></i>
+                  <div className="text-center py-12 text-slate-600">
+                    <i data-lucide="history" className="w-12 h-12 mx-auto mb-2 text-slate-600"></i>
                     <p className="text-sm font-medium">Belum ada riwayat tersimpan di Cloud Firebase.</p>
                   </div>
                 ) : (
@@ -5845,7 +6035,7 @@ Daily inventory done✅
                       <div key={item.tanggal} className="py-4 flex justify-between items-center">
                         <div>
                           <h4 className="font-bold text-slate-700 text-sm">{formatIndonesianDate(item.tanggal)}</h4>
-                          <p className="text-xs text-slate-400">
+                          <p className="text-xs text-slate-600">
                             Roti Terjual: {item.totalSales} Pcs | Pendapatan: Rp {item.revenue.toLocaleString('id-ID')}
                           </p>
                         </div>
@@ -5873,7 +6063,7 @@ Daily inventory done✅
                       <p className="text-xs text-slate-500 mt-1">Pilih kategori untuk melihat langkah-langkah SOP beserta foto/video pendukung.</p>
                     </div>
                     {sopCategories.length === 0 ? (
-                      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center text-slate-400 text-sm">Belum ada Panduan SOP untuk toko ini.</div>
+                      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center text-slate-600 text-sm">Belum ada Panduan SOP untuk toko ini.</div>
                     ) : (
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         {sopCategories.map(cat => (
@@ -5889,7 +6079,7 @@ Daily inventory done✅
                               )}
                             </div>
                             <h3 className="font-bold text-slate-800 text-sm mt-2">{cat.name}</h3>
-                            {cat.content && <p className="text-xs text-slate-400 mt-1 line-clamp-2">{cat.content}</p>}
+                            {cat.content && <p className="text-xs text-slate-600 mt-1 line-clamp-2">{cat.content}</p>}
                           </button>
                         ))}
                       </div>
@@ -5906,7 +6096,7 @@ Daily inventory done✅
                       {selectedSopCategory.content ? (
                         <p className="text-sm text-slate-600 mt-2 whitespace-pre-wrap">{selectedSopCategory.content}</p>
                       ) : (
-                        <p className="text-xs text-slate-400 mt-2">Belum ada isi teks untuk SOP ini.</p>
+                        <p className="text-xs text-slate-600 mt-2">Belum ada isi teks untuk SOP ini.</p>
                       )}
 
                       {selectedSopCategory.media.length > 0 && (
@@ -6028,14 +6218,14 @@ Daily inventory done✅
           </div>
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
             {messages.length === 0 && (
-              <p className="text-xs text-slate-400 text-center py-8">Belum ada pesan. Mulai percakapan di bawah ini.</p>
+              <p className="text-xs text-slate-600 text-center py-8">Belum ada pesan. Mulai percakapan di bawah ini.</p>
             )}
             {messages.map(m => (
               <div key={m.id} className={`flex ${m.sender === senderRole ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[75%] rounded-2xl px-3 py-2 text-xs ${m.sender === senderRole ? 'bg-purple-700 text-white rounded-br-sm' : 'bg-slate-100 text-slate-700 rounded-bl-sm'}`}>
                   {m.sender !== senderRole && <p className="text-[10px] font-bold opacity-70 mb-0.5">{m.senderLabel}</p>}
                   <p className="whitespace-pre-wrap break-words">{m.text}</p>
-                  <p className={`text-[9px] mt-1 ${m.sender === senderRole ? 'text-purple-200' : 'text-slate-400'}`}>
+                  <p className={`text-[9px] mt-1 ${m.sender === senderRole ? 'text-purple-200' : 'text-slate-600'}`}>
                     {new Date(m.timestamp).toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                   </p>
                 </div>
