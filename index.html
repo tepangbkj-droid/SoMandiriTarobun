@@ -2584,11 +2584,17 @@ const { useState, useEffect } = React;
               lastSeen: firebase.database.ServerValue.TIMESTAMP,
               storeName
             }).then(() => {
-              presenceRef.set({
+              return presenceRef.set({
                 isOnline: true,
                 lastSeen: firebase.database.ServerValue.TIMESTAMP,
                 storeName
               });
+            }).catch((err) => {
+              // Sebelumnya kegagalan di sini (mis. Firebase Rules menolak/PERMISSION_DENIED,
+              // atau jaringan putus saat menulis) diam-diam gagal tanpa jejak apa pun, sehingga
+              // status "Sedang dibuka" tidak pernah muncul di Admin walau toko benar-benar online.
+              // Sekarang errornya dicatat ke console supaya mudah dilacak penyebabnya.
+              console.error('Gagal update status online toko:', err);
             });
           }
         };
