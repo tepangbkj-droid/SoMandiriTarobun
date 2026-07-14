@@ -110,6 +110,23 @@ const { useState, useEffect } = React;
     const MAX_LOGIN_ATTEMPTS = 5;
     const LOGIN_LOCK_MS = 60 * 1000;
 
+    // ==========================================
+    // KONSTANTA PRESENCE (status online/offline toko)
+    // ==========================================
+    // Didesain TANPA bergantung pada koneksi WebSocket yang tetap terbuka
+    // (mis. .info/connected + onDisconnect() bawaan Firebase). Di banyak jaringan
+    // seluler, koneksi WebSocket ke Firebase suka lambat/diblokir/putus-nyambung,
+    // sehingga status toko sering "nyangkut" Offline padahal toko sedang login &
+    // aktif — inilah penyebab bug yang dilaporkan. Solusinya: toko mengirim
+    // HEARTBEAT lewat HTTPS biasa (REST, sama seperti restSet lain di app ini)
+    // tiap PRESENCE_HEARTBEAT_MS, dan Admin menganggap toko online selama
+    // heartbeat terakhirnya masih "segar" (kurang dari PRESENCE_ONLINE_TIMEOUT_MS
+    // yang lalu). Kalau toko menutup tab/koneksi putus mendadak, heartbeat
+    // otomatis berhenti dan Admin akan melihatnya berubah jadi Offline sendiri
+    // begitu heartbeat terakhir kedaluwarsa — tanpa perlu event "disconnect" apa pun.
+    const PRESENCE_HEARTBEAT_MS = 20 * 1000;       // toko lapor "online" tiap 20 detik
+    const PRESENCE_ONLINE_TIMEOUT_MS = 45 * 1000;  // dianggap offline kalau tak ada kabar > 45 detik
+
     const storeIdToEmail = (storeId) => `store-${storeId}${STORE_EMAIL_DOMAIN}`;
 
     // Menghasilkan token acak yang kuat secara kriptografis (dipakai sebagai "password" toko)
@@ -1302,6 +1319,22 @@ const { useState, useEffect } = React;
         return bindLiveValue(ref, (snap) => setStoresPresence(snap.val() || {}));
       }, []);
 
+      // Status online dihitung dari KESEGARAN heartbeat (lastSeen), bukan cuma dari
+      // flag isOnline yang tersimpan — supaya kalau toko menutup tab tiba-tiba
+      // (tanpa sempat kirim status offline), Admin tetap otomatis melihatnya berubah
+      // jadi Offline begitu heartbeat terakhirnya kedaluwarsa, tanpa perlu refresh
+      // manual. Timer ini memaksa re-render tiap 10 detik supaya perhitungan
+      // "kedaluwarsa" itu ikut ter-update walau tidak ada data baru dari Firebase.
+      const [, forcePresenceTick] = useState(0);
+      useEffect(() => {
+        const t = setInterval(() => forcePresenceTick(x => x + 1), 10000);
+        return () => clearInterval(t);
+      }, []);
+      const isStoreOnline = (presence) => !!(
+        presence && presence.isOnline && presence.lastSeen &&
+        (Date.now() - presence.lastSeen) < PRESENCE_ONLINE_TIMEOUT_MS
+      );
+
       // Live-update untuk modal detail toko. Sebelumnya pakai once('value') sehingga data (riwayat,
       // foto rijek, Telegram) di modal TIDAK otomatis ter-refresh selagi modal terbuka — admin harus
       // tutup lalu buka lagi untuk lihat laporan terbaru. Sekarang pakai listener realtime (.on) supaya
@@ -1806,7 +1839,7 @@ const { useState, useEffect } = React;
                   <div className="space-y-2">
                     {stores.map(store => {
                       const p = storesPresence[store.id];
-                      const isOnline = p?.isOnline === true;
+                      const isOnline = isStoreOnline(p);
                       const lastSeenStr = p?.lastSeen
                         ? new Date(p.lastSeen).toLocaleString('id-ID', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' })
                         : 'Belum pernah aktif';
@@ -2480,6 +2513,17 @@ const { useState, useEffect } = React;
       }, [session]);
 
       const handleLogout = async () => {
+        // Best-effort: langsung tandai toko offline saat logout manual, supaya Admin
+        // tidak perlu menunggu heartbeat kedaluwarsa (~45 detik) untuk lihat perubahannya.
+        // Bukan satu-satunya jaring pengaman — kalau ini gagal (mis. jaringan putus),
+        // status tetap otomatis jadi Offline lewat mekanisme kedaluwarsa heartbeat.
+        if (session && session.role === 'store' && session.storeId) {
+          restSet(db.ref(`storesPresence/${session.storeId}`), {
+            isOnline: false,
+            lastSeen: firebase.database.ServerValue.TIMESTAMP,
+            storeName: session.storeName || ''
+          }).catch(() => {});
+        }
         await auth.signOut();
         clearSession();
         setSession(null);
@@ -2573,34 +2617,44 @@ const { useState, useEffect } = React;
       // ==========================================
       // REAL-TIME PRESENCE: status online/offline toko
       // ==========================================
+      // Sebelumnya pakai .info/connected + presenceRef.onDisconnect() bawaan
+      // Firebase, yang mengharuskan koneksi WebSocket ke Firebase tetap terbuka.
+      // Di banyak jaringan seluler, WebSocket ini suka diblokir/lambat/putus-nyambung
+      // (lihat catatan restUrlFor di atas), sehingga status "online" toko sering
+      // gagal terkirim sama sekali — inilah penyebab bug "toko sudah login tapi di
+      // Admin masih Offline". Sekarang diganti HEARTBEAT lewat HTTPS biasa (REST,
+      // via restSet — sama seperti seluruh proses simpan lain di app ini): toko
+      // mengirim "saya online" tiap PRESENCE_HEARTBEAT_MS, dan Admin menganggap
+      // toko online selama heartbeat terakhirnya masih segar (lihat AdminPanel).
+      // Kalau tab ditutup/koneksi putus mendadak, heartbeat berhenti dan status
+      // otomatis "meluruh" jadi Offline dengan sendirinya di sisi Admin — tanpa
+      // perlu event disconnect apa pun dari Firebase.
       useEffect(() => {
         const presenceRef = db.ref(`storesPresence/${storeId}`);
-        const connectedRef = db.ref('.info/connected');
 
-        const onConnectedChange = (snap) => {
-          if (snap.val() === true) {
-            presenceRef.onDisconnect().set({
-              isOnline: false,
-              lastSeen: firebase.database.ServerValue.TIMESTAMP,
-              storeName
-            }).then(() => {
-              return presenceRef.set({
-                isOnline: true,
-                lastSeen: firebase.database.ServerValue.TIMESTAMP,
-                storeName
-              });
-            }).catch((err) => {
-              // Sebelumnya kegagalan di sini (mis. Firebase Rules menolak/PERMISSION_DENIED,
-              // atau jaringan putus saat menulis) diam-diam gagal tanpa jejak apa pun, sehingga
-              // status "Sedang dibuka" tidak pernah muncul di Admin walau toko benar-benar online.
-              // Sekarang errornya dicatat ke console supaya mudah dilacak penyebabnya.
-              console.error('Gagal update status online toko:', err);
-            });
-          }
+        const sendHeartbeat = () => {
+          restSet(presenceRef, {
+            isOnline: true,
+            lastSeen: firebase.database.ServerValue.TIMESTAMP,
+            storeName
+          }).catch((err) => console.error('Gagal update status online toko:', err));
         };
 
-        connectedRef.on('value', onConnectedChange);
-        return () => connectedRef.off('value', onConnectedChange);
+        sendHeartbeat(); // kirim segera begitu toko login / halaman dibuka
+        const interval = setInterval(sendHeartbeat, PRESENCE_HEARTBEAT_MS);
+
+        // Kirim ulang segera begitu tab kembali aktif (mis. user balik dari app lain
+        // atau layar HP dinyalakan lagi), supaya status "online" langsung update
+        // tanpa perlu menunggu interval heartbeat berikutnya.
+        const onVisible = () => { if (document.visibilityState === 'visible') sendHeartbeat(); };
+        document.addEventListener('visibilitychange', onVisible);
+        window.addEventListener('focus', onVisible);
+
+        return () => {
+          clearInterval(interval);
+          document.removeEventListener('visibilitychange', onVisible);
+          window.removeEventListener('focus', onVisible);
+        };
       }, [storeId, storeName]);
 
       // ==========================================
