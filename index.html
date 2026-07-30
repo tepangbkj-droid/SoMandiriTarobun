@@ -494,10 +494,12 @@ const { useState, useEffect } = React;
     }
 
     // Granularitas versi HARUS SAMA PERSIS dengan versionKeyForPath di worker.js: per-toko
-    // untuk path di bawah 1 toko (stores/<id>/...), atau per-top-level-key untuk path lain.
+    // + per-sub-koleksi (mis. `stores/<id>/history` terpisah dari `stores/<id>/preOrders`)
+    // supaya perubahan di 1 sub-koleksi tidak memicu refetch sub-koleksi lain yang tidak
+    // berhubungan, atau per-top-level-key untuk path lain.
     function versionKeyForPath(rawPath) {
       const parts = String(rawPath || '').replace(/^\/+|\/+$/g, '').split('/');
-      if (parts[0] === 'stores' && parts[1]) return `stores/${parts[1]}`;
+      if (parts[0] === 'stores' && parts[1]) return parts[2] ? `stores/${parts[1]}/${parts[2]}` : `stores/${parts[1]}`;
       return parts[0] || 'root';
     }
 
@@ -777,7 +779,7 @@ const { useState, useEffect } = React;
             body: JSON.stringify({ storeId, token: password, deviceId: getDeviceId() }),
           });
           data = await res.json();
-          if (!res.ok) throw new Error(data.error || 'Login gagal');
+          if (!res.ok) { const e = new Error(data.error || 'Login gagal'); e.status = res.status; throw e; }
           __saveCfSession(data.token, { storeId: data.storeId, role: 'store' });
           auth.currentUser = __makeUser({ storeId: data.storeId, role: 'store' });
           return { user: auth.currentUser, storeInfo: data.storeInfo };
@@ -1883,8 +1885,18 @@ const { useState, useEffect } = React;
           saveSession('store', { storeId, storeName: info.name });
           onLoggedIn({ role: 'store', storeId, storeName: info.name });
         } catch (err) {
-          registerFailedAttempt(key);
-          setError('Nama toko atau token salah.');
+          // BUGFIX (2026-07-30): dulu SELALU menampilkan "Nama toko atau token salah" apa pun
+          // penyebabnya, termasuk saat sebenarnya PENYEBABNYA adalah limit 2 device (pesan asli
+          // dari server soal itu jadi tidak pernah terlihat user). Sekarang: kalau ini kasus
+          // limit device (status 409), tampilkan pesan ASLI dari server & JANGAN hitung sebagai
+          // percobaan gagal (registerFailedAttempt) — user tidak salah ketik apa pun, jadi tidak
+          // adil kalau ini ikut mengunci akunnya karena "5x salah dalam 15 menit".
+          if (err && err.status === 409) {
+            setError(err.message || 'Sudah ada 2 perangkat lain yang sedang aktif memakai akun toko ini.');
+          } else {
+            registerFailedAttempt(key);
+            setError('Nama toko atau token salah.');
+          }
         } finally {
           setLoading(false);
         }
