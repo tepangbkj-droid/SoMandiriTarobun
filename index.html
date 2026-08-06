@@ -4535,6 +4535,63 @@ const { useState, useEffect } = React;
       const [stockItemDraft, setStockItemDraft] = useState({ nama: PRINTING_ITEM_OPTIONS[0], jumlah: '', satuan: 'Bag' });
       const [stockPrintData, setStockPrintData] = useState(null);
 
+      // ==========================================
+      // RIWAYAT CETAK (tersimpan LOKAL di perangkat masing-masing, via localStorage —
+      // BUKAN dikirim/disimpan ke server/Cloud, jadi tiap HP/laptop punya riwayatnya sendiri)
+      // ==========================================
+      // Setiap entri diberi "type" ('premix' / 'stock') supaya riwayat Premix dan Catatan
+      // Stok bisa selalu dipisahkan/difilter dengan jelas dan TIDAK tercampur saat ditampilkan.
+      const PRINT_HISTORY_KEY = 'tarobun_print_history_v1';
+      const [printHistory, setPrintHistory] = useState(() => {
+        try {
+          const raw = localStorage.getItem(PRINT_HISTORY_KEY);
+          const parsed = raw ? JSON.parse(raw) : [];
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (err) {
+          console.error('Gagal membaca riwayat cetak lokal:', err);
+          return [];
+        }
+      });
+      const [printHistoryFilter, setPrintHistoryFilter] = useState('all'); // 'all' | 'premix' | 'stock'
+      const [confirmDeleteHistoryId, setConfirmDeleteHistoryId] = useState(null);
+      const [confirmClearHistoryType, setConfirmClearHistoryType] = useState(null); // null | 'all' | 'premix' | 'stock'
+
+      const persistPrintHistory = (list) => {
+        try {
+          localStorage.setItem(PRINT_HISTORY_KEY, JSON.stringify(list));
+        } catch (err) {
+          console.error('Gagal menyimpan riwayat cetak lokal:', err);
+        }
+      };
+
+      const saveToPrintHistory = (type, data) => {
+        setPrintHistory(prev => {
+          const entry = { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, type, data, savedAt: new Date().toISOString() };
+          // Batasi 200 entri terakhir per device supaya localStorage tidak membengkak.
+          const next = [entry, ...prev].slice(0, 200);
+          persistPrintHistory(next);
+          return next;
+        });
+      };
+
+      const deletePrintHistoryItem = (id) => {
+        setPrintHistory(prev => {
+          const next = prev.filter(h => h.id !== id);
+          persistPrintHistory(next);
+          return next;
+        });
+        setConfirmDeleteHistoryId(null);
+      };
+
+      const clearPrintHistory = (type) => {
+        setPrintHistory(prev => {
+          const next = type === 'all' ? [] : prev.filter(h => h.type !== type);
+          persistPrintHistory(next);
+          return next;
+        });
+        setConfirmClearHistoryType(null);
+      };
+
       const handlePremixFormChange = (field, value) => setPremixForm(prev => ({ ...prev, [field]: value }));
 
       const handlePremixPrint = (e) => {
@@ -4543,7 +4600,15 @@ const { useState, useEffect } = React;
           setNotification({ type: 'error', message: 'Lengkapi Nama Toko, Nama Barang, Tanggal Buat & Tanggal Exp terlebih dahulu.' });
           return;
         }
-        setPremixPrintData({ ...premixForm });
+        const dataToPrint = { ...premixForm };
+        // PENTING: pastikan data Catatan Stok yang lama dikosongkan lebih dulu supaya TIDAK
+        // ikut tercetak bersamaan dengan Label Premix di area cetak (lihat #thermalPrintArea).
+        setStockPrintData(null);
+        setPremixPrintData(dataToPrint);
+        // Simpan ke riwayat lokal (fitur "simpan setelah klik print") & langsung kosongkan
+        // kembali form-nya supaya siap dipakai untuk cetak berikutnya.
+        saveToPrintHistory('premix', dataToPrint);
+        setPremixForm({ namaToko: storeName || '', namaBarang: '', tanggalBuat: '', tanggalExp: '', asalBahan: '' });
       };
 
       // Begitu data cetak premix siap, panggil dialog print browser. Dialog print bawaan
@@ -4577,7 +4642,16 @@ const { useState, useEffect } = React;
           setNotification({ type: 'error', message: 'Tambahkan minimal 1 item sebelum mencetak.' });
           return;
         }
-        setStockPrintData({ namaToko: stockNoteStore, items: stockNoteItems, tanggalCetak: new Date() });
+        const now = new Date();
+        const dataToPrint = { namaToko: stockNoteStore, items: stockNoteItems, tanggalCetak: now };
+        // PENTING: pastikan data Label Premix yang lama dikosongkan lebih dulu supaya TIDAK
+        // ikut tercetak bersamaan dengan Catatan Stok di area cetak (lihat #thermalPrintArea).
+        setPremixPrintData(null);
+        setStockPrintData(dataToPrint);
+        // Simpan ke riwayat lokal & kosongkan kembali daftar item + nama toko.
+        saveToPrintHistory('stock', { namaToko: stockNoteStore, items: stockNoteItems, tanggalCetak: now.toISOString() });
+        setStockNoteItems([]);
+        setStockNoteStore(storeName || '');
       };
 
       useEffect(() => {
@@ -4586,6 +4660,18 @@ const { useState, useEffect } = React;
           return () => clearTimeout(t);
         }
       }, [stockPrintData]);
+
+      // Setelah dialog print browser ditutup (baik jadi dicetak maupun dibatalkan), kosongkan
+      // kembali area cetak. Ini jaring pengaman tambahan (selain pengosongan di atas) supaya
+      // area cetak tidak pernah menyimpan data lama yang bisa ikut tercetak di lain waktu.
+      useEffect(() => {
+        const handleAfterPrint = () => {
+          setPremixPrintData(null);
+          setStockPrintData(null);
+        };
+        window.addEventListener('afterprint', handleAfterPrint);
+        return () => window.removeEventListener('afterprint', handleAfterPrint);
+      }, []);
 
       // ==========================================
       // STATUS KONEKSI JARINGAN (sisi Toko)
@@ -8608,6 +8694,10 @@ Daily inventory done✅
                 <div className="flex bg-slate-100 rounded-xl p-1 gap-1">
                   <button onClick={() => setPrintingSubTab('premix')} className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${printingSubTab === 'premix' ? 'bg-white text-purple-800 shadow-sm' : 'text-slate-500'}`}>Premix</button>
                   <button onClick={() => setPrintingSubTab('stock')} className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${printingSubTab === 'stock' ? 'bg-white text-purple-800 shadow-sm' : 'text-slate-500'}`}>Catatan Stok</button>
+                  <button onClick={() => setPrintingSubTab('history')} className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all flex items-center justify-center gap-1 ${printingSubTab === 'history' ? 'bg-white text-purple-800 shadow-sm' : 'text-slate-500'}`}>
+                    <i data-lucide="history" className="w-3.5 h-3.5"></i>
+                    <span>Riwayat</span>
+                  </button>
                 </div>
 
                 {printingSubTab === 'premix' && (
@@ -8688,6 +8778,113 @@ Daily inventory done✅
                     </button>
                   </div>
                 )}
+
+                {printingSubTab === 'history' && (() => {
+                  const filteredHistory = printHistory.filter(h => printHistoryFilter === 'all' ? true : h.type === printHistoryFilter);
+                  return (
+                    <div className="space-y-3">
+                      <div className="bg-purple-50 border border-purple-100 rounded-xl px-3 py-2.5 flex items-start gap-2">
+                        <i data-lucide="smartphone" className="w-3.5 h-3.5 text-purple-700 shrink-0 mt-0.5"></i>
+                        <p className="text-[11px] text-purple-800 leading-relaxed">Riwayat ini tersimpan <b>hanya di perangkat ini</b> (localStorage), tidak dikirim ke server. Kalau ganti HP/browser atau membersihkan data browser, riwayat ini akan hilang.</p>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex bg-slate-100 rounded-xl p-1 gap-1 flex-1">
+                          <button onClick={() => setPrintHistoryFilter('all')} className={`flex-1 text-[11px] font-bold py-1.5 rounded-lg transition-all ${printHistoryFilter === 'all' ? 'bg-white text-purple-800 shadow-sm' : 'text-slate-500'}`}>Semua</button>
+                          <button onClick={() => setPrintHistoryFilter('premix')} className={`flex-1 text-[11px] font-bold py-1.5 rounded-lg transition-all ${printHistoryFilter === 'premix' ? 'bg-white text-purple-800 shadow-sm' : 'text-slate-500'}`}>Premix</button>
+                          <button onClick={() => setPrintHistoryFilter('stock')} className={`flex-1 text-[11px] font-bold py-1.5 rounded-lg transition-all ${printHistoryFilter === 'stock' ? 'bg-white text-purple-800 shadow-sm' : 'text-slate-500'}`}>Catatan Stok</button>
+                        </div>
+                        {filteredHistory.length > 0 && (
+                          <button
+                            onClick={() => setConfirmClearHistoryType(printHistoryFilter)}
+                            className="shrink-0 flex items-center gap-1 text-[10px] font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-100 px-2.5 py-2 rounded-xl"
+                          >
+                            <i data-lucide="trash-2" className="w-3 h-3"></i>
+                            <span>Hapus Semua</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {filteredHistory.length === 0 ? (
+                        <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center">
+                          <i data-lucide="inbox" className="w-8 h-8 text-slate-300 mx-auto mb-2"></i>
+                          <p className="text-xs text-slate-500">Belum ada riwayat cetak{printHistoryFilter !== 'all' ? (printHistoryFilter === 'premix' ? ' Premix' : ' Catatan Stok') : ''}.</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {filteredHistory.map(h => (
+                            <div key={h.id} className="bg-white rounded-2xl border border-slate-200 p-3.5">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 mb-1">
+                                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-md ${h.type === 'premix' ? 'bg-wheat-100 text-wheat-600' : 'bg-brand-100 text-brand-700'}`}>
+                                      {h.type === 'premix' ? 'PREMIX' : 'CATATAN STOK'}
+                                    </span>
+                                    <span className="text-[10px] text-slate-400">
+                                      {new Date(h.savedAt).toLocaleString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                  </div>
+                                  {h.type === 'premix' ? (
+                                    <div className="text-xs text-slate-600 space-y-0.5">
+                                      <p className="font-semibold text-slate-800 truncate">{h.data.namaBarang}</p>
+                                      <p className="truncate">Toko: {h.data.namaToko}</p>
+                                      <p className="truncate">Buat: {formatIndonesianDate(h.data.tanggalBuat)} &middot; Exp: {formatIndonesianDate(h.data.tanggalExp)}</p>
+                                      {h.data.asalBahan && <p className="truncate">Asal: {h.data.asalBahan}</p>}
+                                    </div>
+                                  ) : (
+                                    <div className="text-xs text-slate-600 space-y-0.5">
+                                      <p className="font-semibold text-slate-800 truncate">Toko: {h.data.namaToko}</p>
+                                      <p>{(h.data.items || []).length} item</p>
+                                      <p className="truncate text-slate-500">
+                                        {(h.data.items || []).map(it => `${it.nama} (${it.jumlah} ${it.satuan})`).join(', ')}
+                                      </p>
+                                    </div>
+                                  )}
+                                </div>
+                                <button onClick={() => setConfirmDeleteHistoryId(h.id)} className="shrink-0 text-rose-600 hover:bg-rose-50 p-1.5 rounded-lg border border-rose-100">
+                                  <i data-lucide="trash-2" className="w-3.5 h-3.5"></i>
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* Konfirmasi hapus 1 entri riwayat cetak */}
+            {confirmDeleteHistoryId && (
+              <div className="fixed inset-0 z-[95] bg-black/50 flex items-center justify-center p-4 animate-fadeIn">
+                <div className="bg-white rounded-2xl animate-scaleIn w-full max-w-sm p-6">
+                  <h3 className="font-bold text-slate-800 mb-2">Hapus Riwayat Ini?</h3>
+                  <p className="text-xs text-slate-500 mb-4">Entri riwayat cetak ini akan dihapus permanen dari perangkat ini dan tidak bisa dikembalikan.</p>
+                  <div className="flex gap-2">
+                    <button onClick={() => setConfirmDeleteHistoryId(null)} className="flex-1 bg-slate-100 text-slate-600 font-bold py-2.5 rounded-xl text-sm">Batal</button>
+                    <button onClick={() => deletePrintHistoryItem(confirmDeleteHistoryId)} className="flex-1 bg-rose-600 text-white font-bold py-2.5 rounded-xl text-sm">Ya, Hapus</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Konfirmasi hapus semua riwayat cetak (sesuai filter yang aktif) */}
+            {confirmClearHistoryType && (
+              <div className="fixed inset-0 z-[95] bg-black/50 flex items-center justify-center p-4 animate-fadeIn">
+                <div className="bg-white rounded-2xl animate-scaleIn w-full max-w-sm p-6">
+                  <h3 className="font-bold text-slate-800 mb-2">Hapus Semua Riwayat?</h3>
+                  <p className="text-xs text-slate-500 mb-4">
+                    {confirmClearHistoryType === 'all'
+                      ? 'Seluruh riwayat cetak (Premix & Catatan Stok) di perangkat ini akan dihapus permanen.'
+                      : `Seluruh riwayat cetak ${confirmClearHistoryType === 'premix' ? 'Premix' : 'Catatan Stok'} di perangkat ini akan dihapus permanen.`}
+                    {' '}Tindakan ini tidak bisa dibatalkan.
+                  </p>
+                  <div className="flex gap-2">
+                    <button onClick={() => setConfirmClearHistoryType(null)} className="flex-1 bg-slate-100 text-slate-600 font-bold py-2.5 rounded-xl text-sm">Batal</button>
+                    <button onClick={() => clearPrintHistory(confirmClearHistoryType)} className="flex-1 bg-rose-600 text-white font-bold py-2.5 rounded-xl text-sm">Ya, Hapus</button>
+                  </div>
+                </div>
               </div>
             )}
 
