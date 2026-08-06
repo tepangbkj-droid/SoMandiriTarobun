@@ -321,6 +321,31 @@ const { useState, useEffect } = React;
       }
     };
 
+    // Label device yang gampang dikenali manusia (dipakai Admin di menu "Perangkat" supaya
+    // bisa membedakan mana device yang dikenali vs asing), disusun dari user agent browser.
+    // Bukan identitas presisi (hanya perkiraan browser + OS), tapi cukup untuk pengecekan
+    // sekilas ("oh ini HP kasir", "ini laptop yang tidak dikenal", dsb).
+    const getDeviceLabel = () => {
+      try {
+        const ua = navigator.userAgent || '';
+        let os = 'Unknown OS';
+        if (/Android/i.test(ua)) os = 'Android';
+        else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+        else if (/Windows/i.test(ua)) os = 'Windows';
+        else if (/Mac OS X/i.test(ua)) os = 'macOS';
+        else if (/Linux/i.test(ua)) os = 'Linux';
+        let browser = 'Browser';
+        if (/Edg\//i.test(ua)) browser = 'Edge';
+        else if (/Chrome\//i.test(ua) && !/OPR\//i.test(ua)) browser = 'Chrome';
+        else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+        else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari';
+        else if (/OPR\//i.test(ua)) browser = 'Opera';
+        return `${browser} - ${os}`;
+      } catch (e) {
+        return 'Perangkat tidak dikenal';
+      }
+    };
+
     let __sessionToken = null;
     let __authListeners = [];
 
@@ -776,7 +801,7 @@ const { useState, useEffect } = React;
           const storeId = email.replace(/^store-/, '').replace(/@toko\.tarobun-app\.internal$/, '');
           res = await fetch(`${WORKER_BASE}/api/login/store`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ storeId, token: password, deviceId: getDeviceId() }),
+            body: JSON.stringify({ storeId, token: password, deviceId: getDeviceId(), deviceLabel: getDeviceLabel() }),
           });
           data = await res.json();
           if (!res.ok) { const e = new Error(data.error || 'Login gagal'); e.status = res.status; throw e; }
@@ -2055,6 +2080,74 @@ const { useState, useEffect } = React;
       return <div className={`skeleton ${className}`}></div>;
     }
 
+    // ==========================================
+    // PEMILIH TOKO DENGAN PENCARIAN (2026-08-06)
+    // ==========================================
+    // Dipakai di semua tempat Admin memilih toko (Update Web, field tambahan Form Builder,
+    // SOP per-toko, dst) — sebelumnya daftar toko ditampilkan PENUH tanpa batas tinggi/pencarian,
+    // jadi merepotkan begitu jumlah toko sudah banyak. Sekarang: ada kotak cari (muncul otomatis
+    // kalau toko lebih dari 5), dan daftarnya dibatasi tinggi + bisa discroll, tidak lagi
+    // menampilkan semua sekaligus memenuhi layar.
+    // mode "chips": tombol bulat kecil (dipakai Form Builder & SOP). mode "checkbox": daftar
+    // dengan checkbox (dipakai Update Web).
+    function StorePicker({ stores, selectedIds, onToggle, onSelectAll, allLabel = 'Semua Toko', mode = 'chips', activeColorClass = 'bg-purple-800 text-white border-purple-800', maxHeight = 'max-h-44' }) {
+      const [query, setQuery] = useState('');
+      const q = query.trim().toLowerCase();
+      const filtered = q ? stores.filter(s => (s.name || '').toLowerCase().includes(q)) : stores;
+
+      return (
+        <div>
+          {stores.length > 5 && (
+            <div className="relative mb-1.5">
+              <i data-lucide="search" className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Cari nama toko..."
+                className="w-full pl-8 pr-2.5 py-1.5 border border-slate-300 rounded-lg text-[11px]"
+              />
+            </div>
+          )}
+          {mode === 'chips' ? (
+            <div className={`flex flex-wrap content-start gap-1.5 ${maxHeight} overflow-y-auto pr-0.5`}>
+              {!q && (
+                <button type="button" onClick={onSelectAll} className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border shrink-0 ${selectedIds.length === 0 ? activeColorClass : 'bg-white text-slate-600 border-slate-300'}`}>
+                  {allLabel}
+                </button>
+              )}
+              {filtered.map(s => (
+                <button
+                  type="button"
+                  key={s.id}
+                  onClick={() => onToggle(s.id)}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border shrink-0 ${selectedIds.includes(s.id) ? activeColorClass : 'bg-white text-slate-600 border-slate-300'}`}
+                >
+                  {s.name}
+                </button>
+              ))}
+              {filtered.length === 0 && (
+                <p className="text-[10px] text-slate-400 py-1">Tidak ada toko yang cocok dengan "{query}".</p>
+              )}
+            </div>
+          ) : (
+            <div className={`border border-slate-200 rounded-xl p-3 ${maxHeight} overflow-y-auto space-y-1`}>
+              {stores.length === 0 && <p className="text-xs text-slate-600">Belum ada toko.</p>}
+              {filtered.map(s => (
+                <label key={s.id} className="flex items-center gap-2 text-xs font-semibold text-slate-600 px-1 py-1">
+                  <input type="checkbox" checked={selectedIds.includes(s.id)} onChange={() => onToggle(s.id)} className="rounded" />
+                  {s.name}
+                </label>
+              ))}
+              {filtered.length === 0 && stores.length > 0 && (
+                <p className="text-xs text-slate-400 py-1">Tidak ada toko yang cocok dengan "{query}".</p>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // Skeleton khusus bentuk "Modal Detail Toko" — meniru kerangka konten aslinya (kredensial,
     // ringkasan angka, daftar laporan) supaya transisi loading→data terasa mulus, bukan lompatan
     // dari teks "Memuat..." ke layout yang sama sekali berbeda.
@@ -2119,6 +2212,9 @@ const { useState, useEffect } = React;
       const [webUpdateText, setWebUpdateText] = useState('');
       const [webUpdateAll, setWebUpdateAll] = useState(true);
       const [webUpdateStoreIds, setWebUpdateStoreIds] = useState([]);
+      // Pencarian toko di daftar "Pilih Toko" pada tab Chat (list toko sudah bisa discroll,
+      // ini menambahkan kotak cari supaya lebih cepat menemukan toko tertentu).
+      const [chatStoreQuery, setChatStoreQuery] = useState('');
       const [sendingWebUpdate, setSendingWebUpdate] = useState(false);
       const [webUpdateReport, setWebUpdateReport] = useState(null); // { success: [], failed: [] }
       const toggleWebUpdateStore = (storeId) => {
@@ -2485,6 +2581,63 @@ const { useState, useEffect } = React;
         presence && presence.isOnline && presence.lastSeen &&
         (Date.now() - presence.lastSeen) < PRESENCE_ONLINE_TIMEOUT_MS
       );
+
+      // ==========================================
+      // MENU "PERANGKAT" — monitor device login per toko + logout paksa (2026-08-06)
+      // ==========================================
+      // Menggantikan aturan lama "maks 2 device/toko" (sudah dihapus di worker.js): sekarang
+      // toko boleh login di berapa pun device sekaligus, dan menu ini murni untuk MEMANTAU
+      // device apa saja yang sedang login, plus tombol logout paksa untuk device yang
+      // dianggap tidak dikenali/mencurigakan. Hanya di-poll saat tab "Perangkat" sedang dibuka
+      // supaya tidak menambah beban request kalau Admin sedang di menu lain.
+      const [devicesData, setDevicesData] = useState({}); // { storeId: [{deviceId, deviceLabel, loginAt, lastSeen, isActive}, ...] }
+      const [loadingDevices, setLoadingDevices] = useState(false);
+      const [kickingDevice, setKickingDevice] = useState(null); // `${storeId}::${deviceId}` yang sedang diproses
+
+      const loadDevices = async () => {
+        setLoadingDevices(true);
+        try {
+          const res = await fetch(`${WORKER_BASE}/api/admin/devices`, { headers: __authHeaders() });
+          const data = await res.json();
+          setDevicesData(data || {});
+        } catch (e) {
+          console.error('Gagal memuat data perangkat:', e);
+        } finally {
+          setLoadingDevices(false);
+        }
+      };
+
+      useEffect(() => {
+        if (tab !== 'devices') return;
+        let stopped = false;
+        const poll = async () => {
+          if (stopped) return;
+          if (!document.hidden) await loadDevices();
+          if (!stopped) setTimeout(poll, 15000);
+        };
+        poll();
+        return () => { stopped = true; };
+      }, [tab]);
+
+      const handleKickDevice = async (storeId, deviceId, deviceLabel) => {
+        const ok = window.confirm(`Logout paksa perangkat "${deviceLabel || deviceId.slice(0, 8)}" dari toko ini?\n\nDevice tersebut akan otomatis ter-logout pada heartbeat berikutnya (maks ±1 menit).`);
+        if (!ok) return;
+        const key = `${storeId}::${deviceId}`;
+        setKickingDevice(key);
+        try {
+          await fetch(`${WORKER_BASE}/api/admin/devices/kick`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...__authHeaders() },
+            body: JSON.stringify({ storeId, deviceId }),
+          });
+          setDevicesData(prev => ({ ...prev, [storeId]: (prev[storeId] || []).filter(d => d.deviceId !== deviceId) }));
+        } catch (e) {
+          console.error(e);
+          alert('Gagal logout paksa perangkat. Cek koneksi internet.');
+        } finally {
+          setKickingDevice(null);
+        }
+      };
 
       // Live-update untuk modal detail toko. Sebelumnya pakai once('value') sehingga data (riwayat,
       // foto rijek, Telegram) di modal TIDAK otomatis ter-refresh selagi modal terbuka — admin harus
@@ -3118,6 +3271,10 @@ const { useState, useEffect } = React;
                     <i data-lucide="megaphone" className="w-4 h-4"></i>
                     <span>Update Web</span>
                   </button>
+                  <button onClick={() => { setTab('devices'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${tab === 'devices' ? 'bg-indigo-50 text-indigo-900' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="monitor-smartphone" className="w-4 h-4"></i>
+                    <span>Perangkat</span>
+                  </button>
 
                   <div className="pt-3 mt-3 border-t border-slate-100 space-y-1">
                     <button onClick={() => { setShowOnboarding(true); setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-all">
@@ -3291,25 +3448,13 @@ const { useState, useEffect } = React;
                     )}
                     <div className="sm:col-span-2">
                       <label className="block text-[10px] font-semibold text-slate-600 mb-1">Berlaku untuk Toko Mana</label>
-                      <div className="flex flex-wrap gap-1.5 mb-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setNewFieldStoreIds([])}
-                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${newFieldStoreIds.length === 0 ? 'bg-purple-800 text-white border-purple-800' : 'bg-white text-slate-600 border-slate-300'}`}
-                        >
-                          Semua Toko
-                        </button>
-                        {stores.map(s => (
-                          <button
-                            type="button"
-                            key={s.id}
-                            onClick={() => toggleNewFieldStore(s.id)}
-                            className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${newFieldStoreIds.includes(s.id) ? 'bg-purple-800 text-white border-purple-800' : 'bg-white text-slate-600 border-slate-300'}`}
-                          >
-                            {s.name}
-                          </button>
-                        ))}
-                      </div>
+                      <StorePicker
+                        stores={stores}
+                        selectedIds={newFieldStoreIds}
+                        onToggle={toggleNewFieldStore}
+                        onSelectAll={() => setNewFieldStoreIds([])}
+                        activeColorClass="bg-purple-800 text-white border-purple-800"
+                      />
                       <p className="text-[10px] text-slate-600">Klik "Semua Toko" agar berlaku untuk semua, atau pilih satu/beberapa toko tertentu saja. Field ini juga akan otomatis ikut muncul di laporan Telegram sesuai toko yang dipilih.</p>
                     </div>
                   </div>
@@ -3380,25 +3525,13 @@ const { useState, useEffect } = React;
                   </div>
                   <div>
                     <label className="block text-[10px] font-semibold text-slate-600 mb-1">Berlaku untuk Toko Mana</label>
-                    <div className="flex flex-wrap gap-1.5 mb-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setNewSopStoreIds([])}
-                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${newSopStoreIds.length === 0 ? 'bg-indigo-900 text-white border-indigo-900' : 'bg-white text-slate-600 border-slate-300'}`}
-                      >
-                        Semua Toko
-                      </button>
-                      {stores.map(s => (
-                        <button
-                          type="button"
-                          key={s.id}
-                          onClick={() => toggleNewSopStore(s.id)}
-                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${newSopStoreIds.includes(s.id) ? 'bg-indigo-900 text-white border-indigo-900' : 'bg-white text-slate-600 border-slate-300'}`}
-                        >
-                          {s.name}
-                        </button>
-                      ))}
-                    </div>
+                    <StorePicker
+                      stores={stores}
+                      selectedIds={newSopStoreIds}
+                      onToggle={toggleNewSopStore}
+                      onSelectAll={() => setNewSopStoreIds([])}
+                      activeColorClass="bg-indigo-900 text-white border-indigo-900"
+                    />
                     <p className="text-[10px] text-slate-600">Klik "Semua Toko" agar SOP ini muncul di semua cabang, atau pilih satu/beberapa toko tertentu saja.</p>
                   </div>
                   <div>
@@ -3449,12 +3582,13 @@ const { useState, useEffect } = React;
                           </div>
                           <div>
                             <label className="block text-[10px] font-semibold text-slate-600 mb-1">Berlaku untuk Toko Mana</label>
-                            <div className="flex flex-wrap gap-1.5">
-                              <button type="button" onClick={() => setEditSopDraft(prev => ({ ...prev, storeIds: [] }))} className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${editSopDraft.storeIds.length === 0 ? 'bg-indigo-900 text-white border-indigo-900' : 'bg-white text-slate-600 border-slate-300'}`}>Semua Toko</button>
-                              {stores.map(s => (
-                                <button type="button" key={s.id} onClick={() => toggleEditSopStore(s.id)} className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${editSopDraft.storeIds.includes(s.id) ? 'bg-indigo-900 text-white border-indigo-900' : 'bg-white text-slate-600 border-slate-300'}`}>{s.name}</button>
-                              ))}
-                            </div>
+                            <StorePicker
+                              stores={stores}
+                              selectedIds={editSopDraft.storeIds}
+                              onToggle={toggleEditSopStore}
+                              onSelectAll={() => setEditSopDraft(prev => ({ ...prev, storeIds: [] }))}
+                              activeColorClass="bg-indigo-900 text-white border-indigo-900"
+                            />
                           </div>
                           <div className="flex gap-2">
                             <button onClick={() => handleSaveEditSop(cat.id)} disabled={savingSop} className="bg-indigo-900 disabled:opacity-50 text-white text-xs font-bold px-4 py-2 rounded-lg">Simpan</button>
@@ -3518,7 +3652,19 @@ const { useState, useEffect } = React;
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-3 md:col-span-1 max-h-[70vh] overflow-y-auto">
                   <h3 className="font-bold text-slate-700 text-sm px-2 pb-2 border-b border-slate-100 mb-2">Pilih Toko</h3>
-                  {stores.map(store => (
+                  {stores.length > 5 && (
+                    <div className="relative mb-2">
+                      <i data-lucide="search" className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+                      <input
+                        type="text"
+                        value={chatStoreQuery}
+                        onChange={(e) => setChatStoreQuery(e.target.value)}
+                        placeholder="Cari nama toko..."
+                        className="w-full pl-8 pr-2.5 py-1.5 border border-slate-300 rounded-lg text-[11px]"
+                      />
+                    </div>
+                  )}
+                  {stores.filter(store => !chatStoreQuery.trim() || store.name.toLowerCase().includes(chatStoreQuery.trim().toLowerCase())).map(store => (
                     <button key={store.id} onClick={() => openChatWithStore(store)} className={`w-full flex items-center justify-between text-left px-3 py-2 rounded-lg text-sm font-semibold mb-1 ${activeChatStore?.id === store.id ? 'bg-purple-50 text-purple-800' : 'text-slate-600 hover:bg-slate-50'}`}>
                       <span className="flex items-center gap-1.5 min-w-0">
                         <PresenceDot isOnline={isStoreOnline(storesPresence[store.id])} size="w-2 h-2" />
@@ -3529,6 +3675,9 @@ const { useState, useEffect } = React;
                       )}
                     </button>
                   ))}
+                  {chatStoreQuery.trim() && stores.filter(store => store.name.toLowerCase().includes(chatStoreQuery.trim().toLowerCase())).length === 0 && (
+                    <p className="text-[11px] text-slate-400 px-2 py-2">Tidak ada toko yang cocok dengan "{chatStoreQuery}".</p>
+                  )}
                 </div>
                 <div className="md:col-span-2">
                   {activeChatStore ? (
@@ -3572,15 +3721,13 @@ const { useState, useEffect } = React;
                       </button>
                     </div>
                     {!webUpdateAll && (
-                      <div className="border border-slate-200 rounded-xl p-3 max-h-48 overflow-y-auto space-y-1">
-                        {stores.length === 0 && <p className="text-xs text-slate-600">Belum ada toko.</p>}
-                        {stores.map(store => (
-                          <label key={store.id} className="flex items-center gap-2 text-xs font-semibold text-slate-600 px-1 py-1">
-                            <input type="checkbox" checked={webUpdateStoreIds.includes(store.id)} onChange={() => toggleWebUpdateStore(store.id)} className="rounded" />
-                            {store.name}
-                          </label>
-                        ))}
-                      </div>
+                      <StorePicker
+                        stores={stores}
+                        selectedIds={webUpdateStoreIds}
+                        onToggle={toggleWebUpdateStore}
+                        mode="checkbox"
+                        maxHeight="max-h-48"
+                      />
                     )}
                   </div>
 
@@ -3604,6 +3751,82 @@ const { useState, useEffect } = React;
                     </div>
                   )}
                 </div>
+              </div>
+            )}
+
+            {tab === 'devices' && (
+              <div className="max-w-3xl mx-auto space-y-4">
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-1">
+                  <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                    <i data-lucide="monitor-smartphone" className="w-4 h-4 text-purple-700"></i> Monitor Perangkat Login
+                  </h3>
+                  <p className="text-[10px] text-slate-500">
+                    Pantau semua perangkat yang sedang login di tiap toko. Tidak ada lagi batas jumlah device per toko —
+                    satu toko boleh login di berapa pun perangkat sekaligus. Perangkat hanya otomatis keluar kalau tidak
+                    aktif (tidak membuka web) lebih dari 5 jam. Kalau ada perangkat yang tidak Anda kenali, logout paksa lewat tombol di bawah.
+                  </p>
+                </div>
+
+                {loadingDevices && Object.keys(devicesData).length === 0 && (
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 text-center text-slate-500 text-xs">
+                    <i data-lucide="loader" className="w-5 h-5 animate-spin mx-auto mb-2"></i> Memuat data perangkat...
+                  </div>
+                )}
+
+                {stores.map(store => {
+                  const list = devicesData[store.id] || [];
+                  return (
+                    <div key={store.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+                      <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
+                        <div className="flex items-center gap-2">
+                          <PresenceDot isOnline={isStoreOnline(storesPresence[store.id])} size="w-2 h-2" />
+                          <span className="font-bold text-sm text-slate-700">{store.name}</span>
+                        </div>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                          {list.length} perangkat login
+                        </span>
+                      </div>
+                      {list.length === 0 ? (
+                        <p className="text-xs text-slate-500 py-2">Belum ada perangkat yang tercatat login.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {list.slice().sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0)).map(d => {
+                            const kickKey = `${store.id}::${d.deviceId}`;
+                            return (
+                              <div key={d.deviceId} className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2.5">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <i data-lucide="smartphone" className="w-3.5 h-3.5 text-slate-500 shrink-0"></i>
+                                    <span className="text-xs font-bold text-slate-700 truncate">{d.deviceLabel || 'Perangkat tidak dikenal'}</span>
+                                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${d.isActive ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-200 text-slate-500'}`}>
+                                      {d.isActive ? 'Aktif' : 'Tidak Aktif'}
+                                    </span>
+                                  </div>
+                                  <p className="text-[10px] text-slate-500 mt-0.5">
+                                    Login: {new Date(d.loginAt).toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                    {' · '}Terakhir aktif: {new Date(d.lastSeen).toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                  </p>
+                                  <p className="text-[9px] text-slate-400 font-mono truncate">ID: {d.deviceId}</p>
+                                </div>
+                                <button
+                                  onClick={() => handleKickDevice(store.id, d.deviceId, d.deviceLabel)}
+                                  disabled={kickingDevice === kickKey}
+                                  className="shrink-0 flex items-center gap-1 text-[10px] font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 disabled:opacity-50 border border-rose-100 px-2.5 py-1.5 rounded-lg"
+                                >
+                                  <i data-lucide={kickingDevice === kickKey ? 'loader' : 'log-out'} className={`w-3 h-3 ${kickingDevice === kickKey ? 'animate-spin' : ''}`}></i>
+                                  Logout Paksa
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {stores.length === 0 && (
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 text-center text-slate-500 text-xs">Belum ada toko.</div>
+                )}
               </div>
             )}
           </main>
@@ -4199,13 +4422,14 @@ const { useState, useEffect } = React;
       // Kalau tab ditutup/koneksi putus mendadak, heartbeat berhenti dan status
       // otomatis "meluruh" jadi Offline dengan sendirinya di sisi Admin — tanpa
       // perlu event disconnect apa pun dari Firebase.
-      // Logout paksa dari server: dipicu kalau device ini ditendang karena toko sudah login
-      // di 2 device lain (device paling lama tidak aktif yang kena), ATAU device ini sendiri
-      // tidak mengirim heartbeat (tab ditutup/laptop mati) selama lebih dari 5 jam.
+      // Logout paksa dari server: dipicu kalau (a) device ini sendiri tidak mengirim heartbeat
+      // (tab ditutup/laptop mati) selama lebih dari 5 jam, ATAU (b) Admin mengeluarkan device
+      // ini secara manual lewat menu "Perangkat" di Panel Admin. TIDAK ADA lagi limit jumlah
+      // device per toko — toko boleh login di berapa pun device sekaligus.
       const forceKickedLogout = (reason) => {
         const msg = reason === 'inactive-timeout'
           ? '⏱️ Sesi Anda otomatis berakhir karena web ini tidak dibuka/aktif selama lebih dari 5 jam. Silakan login kembali.'
-          : '⚠️ Akun toko ini sudah login di 2 perangkat lain (batas maksimal), sehingga sesi di perangkat ini otomatis diakhiri. Silakan login kembali.';
+          : '⚠️ Sesi di perangkat ini telah dikeluarkan (logout paksa) oleh Admin. Silakan login kembali.';
         alert(msg);
         onLogout();
       };
@@ -4386,6 +4610,87 @@ useEffect(() => {
       const [historyList, setHistoryList] = useState([]);
       const [customSalesFields, setCustomSalesFields] = useState([]);
       const [customInventoryFields, setCustomInventoryFields] = useState([]);
+
+      // ==========================================
+      // VALIDASI FIELD KOSONG — SO Harian / Laporan Penjualan (2026-08-06)
+      // ==========================================
+      // Aturan: "Simpan di Cloud" boleh tetap jalan walau ada field kosong (cuma dikasih
+      // PEMBERITAHUAN field apa saja yang belum terisi). Tapi kalau mau langsung "Kirim
+      // Telegram"/"Kirim WA", field WAJIB terisi — kalau memang sengaja kosong, otomatis
+      // diisi 0 (dengan konfirmasi dulu) sebelum dikirim, supaya laporan yang terkirim
+      // selalu lengkap angkanya.
+      const humanizeFieldKey = (key) => {
+        const spaced = String(key).replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/_/g, ' ');
+        return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+      };
+      const SALES_SECTION_LABELS = {
+        soldBuns: 'Roti Terjual', soldBeverages: 'Minuman', financials: 'Keuangan', waste: 'Waste',
+      };
+      // Kumpulkan semua field angka (termasuk yang bersarang seperti soldBuns.original) jadi
+      // daftar datar {label, value, path, setPath} supaya gampang dicek kosong/tidaknya DAN
+      // gampang diisi ulang otomatis dengan 0 tanpa perlu tahu strukturnya di tempat lain.
+      const flattenReportFields = (obj, sectionLabels) => {
+        const out = [];
+        Object.keys(obj || {}).forEach(key => {
+          if (key === 'tanggal' || key === 'custom') return;
+          const val = obj[key];
+          if (val && typeof val === 'object' && !Array.isArray(val)) {
+            const secLabel = (sectionLabels && sectionLabels[key]) || humanizeFieldKey(key);
+            Object.keys(val).forEach(subKey => {
+              out.push({ value: val[subKey], label: `${secLabel} - ${humanizeFieldKey(subKey)}`, group: key, sub: subKey });
+            });
+          } else {
+            out.push({ value: val, label: humanizeFieldKey(key), group: null, sub: key });
+          }
+        });
+        return out;
+      };
+      const isFieldEmpty = (v) => v === '' || v === null || typeof v === 'undefined';
+
+      // Menghasilkan daftar field yang masih kosong dari salesData + inventoryData saat ini
+      // (dipanggil ulang tiap kali mau simpan/kirim, bukan lewat useMemo, supaya selalu pakai
+      // nilai TERBARU persis saat tombol ditekan).
+      const getEmptyReportFields = () => {
+        const salesFields = flattenReportFields(salesData, SALES_SECTION_LABELS).map(f => ({ ...f, section: 'sales', sectionLabel: 'Laporan Penjualan' }));
+        const invFields = flattenReportFields(inventoryData, {}).map(f => ({ ...f, section: 'inventory', sectionLabel: 'SO Stok' }));
+        const customSales = (customSalesFields || []).filter(f => f.type !== 'text').map(f => ({
+          value: (salesData.custom || {})[f.id], label: f.label, section: 'sales', sectionLabel: 'Laporan Penjualan', group: 'custom', sub: f.id,
+        }));
+        const customInv = (customInventoryFields || []).filter(f => f.type !== 'text').map(f => ({
+          value: (inventoryData.custom || {})[f.id], label: f.label, section: 'inventory', sectionLabel: 'SO Stok', group: 'custom', sub: f.id,
+        }));
+        return [...salesFields, ...customSales, ...invFields, ...customInv].filter(f => isFieldEmpty(f.value));
+      };
+
+      // Isi 0 ke SEMUA field yang masih kosong (dipanggil setelah Admin/toko konfirmasi mau
+      // lanjut kirim walau ada yang kosong) — mengembalikan salesData & inventoryData baru.
+      const fillEmptyReportFieldsWithZero = (emptyFields) => {
+        const newSales = JSON.parse(JSON.stringify(salesData));
+        const newInv = JSON.parse(JSON.stringify(inventoryData));
+        emptyFields.forEach(f => {
+          const target = f.section === 'sales' ? newSales : newInv;
+          if (f.group === 'custom') {
+            target.custom = target.custom || {};
+            target.custom[f.sub] = 0;
+          } else if (f.group) {
+            target[f.group] = target[f.group] || {};
+            target[f.group][f.sub] = 0;
+          } else {
+            target[f.sub] = 0;
+          }
+        });
+        return { newSales, newInv };
+      };
+
+      // Dipakai untuk banner notifikasi non-blocking di tab Sales & Inventory — dihitung ulang
+      // tiap render (murah, jumlah field terbatas) supaya selalu sinkron dengan input terbaru.
+      const emptyReportFieldsPreview = getEmptyReportFields();
+
+      // Modal konfirmasi "field kosong" khusus saat mau KIRIM (Telegram/WA) — beda dengan Simpan
+      // yang tidak butuh konfirmasi apa pun.
+      const [pendingSendAction, setPendingSendAction] = useState(null); // 'telegram' | 'wa' | null
+      const [showEmptyFieldsSendModal, setShowEmptyFieldsSendModal] = useState(false);
+      const [emptyFieldsForModal, setEmptyFieldsForModal] = useState([]);
 
       // Field tambahan pada Laporan Penjualan & SO Stok yang dikelola Admin (Form Builder di Panel Admin).
       // Ini memungkinkan Admin menambah/mengubah/menghapus pertanyaan form tanpa mengubah kode.
@@ -4864,7 +5169,16 @@ useEffect(() => {
           showToast('Menyimpan ke Cloud Firebase... ☁️');
           // Menggunakan sistem update berbasis tanggal agar data di tanggal yang sama ter-overwrite/diperbarui otomatis
           await restSet(db.ref(`${storeBase}/history/` + idEntry), payload);
-          showToast('Laporan berhasil disimpan di Cloud & HP! 📱✨');
+          // Simpan TETAP boleh jalan walau ada field yang belum diisi — cukup diberi
+          // pemberitahuan field apa saja yang masih kosong (tidak menghalangi penyimpanan).
+          // Aturan "wajib diisi" hanya berlaku saat mengirim langsung ke Telegram/WA (lihat
+          // requestSendReport).
+          const stillEmpty = getEmptyReportFields();
+          if (stillEmpty.length > 0) {
+            showToast(`Laporan tersimpan! ⚠️ Masih ada ${stillEmpty.length} field kosong (lihat catatan kuning di atas tombol simpan).`);
+          } else {
+            showToast('Laporan berhasil disimpan di Cloud & HP! 📱✨');
+          }
           // Update tampilan riwayat SEKETIKA, tidak nunggu listener realtime (yang bisa lambat
           // di jaringan tertentu) — supaya tidak perlu refresh manual untuk melihat data baru.
           setHistoryList(prev => {
@@ -5100,20 +5414,20 @@ Terima Kasih 🙏🏻`;
         document.body.removeChild(tempTextArea);
       };
 
-      const handleSendToWA = () => {
-        const text = generateReportString(salesData, inventoryData);
+      const handleSendToWA = (salesOverride, invOverride) => {
+        const text = generateReportString(salesOverride || salesData, invOverride || inventoryData);
         const encodedText = encodeURIComponent(text);
         window.open(`https://api.whatsapp.com/send?text=${encodedText}`, '_blank');
       };
 
-      const handleSendToTelegram = async () => {
+      const handleSendToTelegram = async (salesOverride, invOverride) => {
         if (!config.telegramBotToken || !config.telegramChatId) {
           showToast('⚠️ Isi Bot Token dan Chat ID Telegram Anda di menu pengaturan (Roda Gigi) dahulu!');
           setShowConfig(true);
           return;
         }
 
-        const reportMessage = generateReportString(salesData, inventoryData);
+        const reportMessage = generateReportString(salesOverride || salesData, invOverride || inventoryData);
         showToast('Mengirim ke Telegram... ✈️');
         const res = await sendTelegramMessage(config.telegramBotToken, config.telegramChatId, reportMessage);
         if (res.ok) {
@@ -5123,6 +5437,34 @@ Terima Kasih 🙏🏻`;
           // oleh sendTelegramMessage, sehingga penyebab gagal selalu bisa ditelusuri.
           showToast(`Gagal mengirim laporan: ${res.error}`);
         }
+      };
+
+      // ==========================================
+      // GERBANG VALIDASI SEBELUM KIRIM (Telegram/WA) — field kosong WAJIB diisi dulu.
+      // Kalau memang sengaja kosong, tawarkan isi otomatis dengan 0 (lewat modal konfirmasi)
+      // baru lanjut kirim. "Simpan di Cloud" TIDAK lewat gerbang ini (lihat handleSaveToDevice).
+      // ==========================================
+      const requestSendReport = (action) => {
+        const empty = getEmptyReportFields();
+        if (empty.length === 0) {
+          if (action === 'telegram') handleSendToTelegram();
+          else handleSendToWA();
+          return;
+        }
+        setEmptyFieldsForModal(empty);
+        setPendingSendAction(action);
+        setShowEmptyFieldsSendModal(true);
+      };
+
+      const handleConfirmFillZeroAndSend = () => {
+        const { newSales, newInv } = fillEmptyReportFieldsWithZero(emptyFieldsForModal);
+        setSalesData(newSales);
+        setInventoryData(newInv);
+        setShowEmptyFieldsSendModal(false);
+        if (pendingSendAction === 'telegram') handleSendToTelegram(newSales, newInv);
+        else if (pendingSendAction === 'wa') handleSendToWA(newSales, newInv);
+        setPendingSendAction(null);
+        setEmptyFieldsForModal([]);
       };
 
       // --- PROSES DELETION PADA FIREBASE ---
@@ -5629,6 +5971,69 @@ Daily inventory done✅
         return canvas.toDataURL('image/jpeg', quality);
       };
 
+      // ==========================================
+      // STEMPEL KETERANGAN & JAM DI DALAM FOTO WASTE/RIJEK (2026-08-06)
+      // ==========================================
+      // Menggambar bar semi-transparan di bagian bawah foto berisi kategori, jumlah,
+      // keterangan, dan tanggal+jam pengiriman — LANGSUNG di dalam gambar (bukan cuma teks
+      // caption terpisah), supaya tetap terbaca walau foto di-screenshot/di-forward/diunduh
+      // terpisah dari pesan Telegram-nya.
+      const stampWasteFotoImage = (dataUrl, lines) => new Promise((resolve, reject) => {
+        try {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+
+            const fontSize = Math.max(13, Math.round(canvas.width * 0.038));
+            const lineGap = Math.round(fontSize * 0.35);
+            const padding = Math.round(fontSize * 0.7);
+            const barHeight = padding * 2 + (lines.length * fontSize) + ((lines.length - 1) * lineGap);
+
+            // Bar gradasi gelap dari transparan ke hitam pekat di bagian paling bawah, supaya
+            // teks putih selalu terbaca jelas di atas foto apapun warnanya.
+            const grad = ctx.createLinearGradient(0, canvas.height - barHeight - 20, 0, canvas.height);
+            grad.addColorStop(0, 'rgba(0,0,0,0)');
+            grad.addColorStop(1, 'rgba(0,0,0,0.72)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, canvas.height - barHeight - 20, canvas.width, barHeight + 20);
+
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+            ctx.textBaseline = 'top';
+            ctx.shadowColor = 'rgba(0,0,0,0.6)';
+            ctx.shadowBlur = 3;
+            let y = canvas.height - barHeight + padding - Math.round(padding * 0.3);
+            lines.forEach(line => {
+              ctx.fillText(line, padding, y, canvas.width - padding * 2);
+              y += fontSize + lineGap;
+            });
+
+            resolve(canvas.toDataURL('image/jpeg', 0.85));
+          };
+          img.onerror = () => reject(new Error('Gagal memuat gambar untuk distempel'));
+          img.src = dataUrl;
+        } catch (e) {
+          reject(e);
+        }
+      });
+
+      // Susun baris teks stempel dari data form foto waste/rijek: kategori+jumlah, keterangan,
+      // lalu tanggal & jam saat foto ini disimpan/dikirim (bukan jam pengambilan foto, supaya
+      // selalu mencerminkan waktu laporan resmi dibuat).
+      const buildWasteFotoStampLines = (kategoriKey, jumlah, keterangan) => {
+        const catInfo = WASTE_CATEGORIES[kategoriKey] || WASTE_CATEGORIES.bunRijek;
+        const now = new Date();
+        const tanggalJam = now.toLocaleString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' WIB';
+        const lines = [`${catInfo.label} • ${numVal(jumlah)} pcs`];
+        if (keterangan && keterangan.trim()) lines.push(keterangan.trim().slice(0, 80));
+        lines.push(tanggalJam);
+        return lines;
+      };
+
       // Estimasi ukuran base64 dalam KB (untuk validasi ringan sebelum simpan)
       const estimateBase64SizeKB = (base64Str) => {
         if (!base64Str) return 0;
@@ -5705,9 +6110,16 @@ Daily inventory done✅
         setIsSavingFoto(true);
         try {
           const now = Date.now();
+          // Stempel keterangan, jumlah, kategori & jam LANGSUNG di dalam foto sebelum diupload,
+          // supaya info itu tetap ikut terlihat di foto itu sendiri (bukan cuma teks caption
+          // terpisah saat dikirim ke Telegram) — lihat stampWasteFotoImage di atas.
+          const stampedFoto = await stampWasteFotoImage(
+            wasteFotoForm.fotoPreview,
+            buildWasteFotoStampLines(wasteFotoForm.kategori, wasteFotoForm.jumlah, wasteFotoForm.keterangan)
+          );
           // Upload dulu ke R2 — database cuma menyimpan URL & key-nya, bukan base64 mentah,
           // supaya storage tetap ringan (lihat juga fitur hapus laporan di Panel Admin).
-          const { url: fotoUrl, key: fotoKey } = await uploadMediaToR2(wasteFotoForm.fotoPreview, `wasteFotos/${storeBase}`, 'jpg');
+          const { url: fotoUrl, key: fotoKey } = await uploadMediaToR2(stampedFoto, `wasteFotos/${storeBase}`, 'jpg');
           const payload = {
             id: now.toString(),
             kategori: wasteFotoForm.kategori,
@@ -6051,7 +6463,25 @@ Daily inventory done✅
         }
       };
 
-      // Kirim satu entri foto waste/rijek langsung ke Telegram (dipakai tombol "Kirim" per-foto)
+      // Kirim langsung dari FORM INPUT (belum disimpan ke Riwayat) — stempel dulu foto-nya
+      // dengan keterangan+jam saat ini sebelum dikirim, sama seperti alur "Simpan ke Riwayat".
+      const handleQuickSendWasteFotoToTelegram = async () => {
+        if (!wasteFotoForm.fotoPreview) return;
+        try {
+          const stampedFoto = await stampWasteFotoImage(
+            wasteFotoForm.fotoPreview,
+            buildWasteFotoStampLines(wasteFotoForm.kategori, wasteFotoForm.jumlah, wasteFotoForm.keterangan)
+          );
+          await handleSendSingleWasteFotoToTelegram({ ...wasteFotoForm, foto: stampedFoto, tanggal: new Date().toISOString().split('T')[0] });
+        } catch (error) {
+          console.error(error);
+          showToast('Gagal menyiapkan stempel foto sebelum mengirim.');
+        }
+      };
+
+      // Kirim satu entri foto waste/rijek langsung ke Telegram (dipakai tombol "Kirim" per-foto,
+      // baik dari Riwayat yang sudah tersimpan & sudah distempel, maupun lewat wrapper
+      // handleQuickSendWasteFotoToTelegram di atas untuk foto yang belum disimpan)
       const handleSendSingleWasteFotoToTelegram = async (item) => {
         if (!config.telegramBotToken || !config.telegramChatId) {
           showToast('⚠️ Isi Bot Token & Chat ID Telegram di menu pengaturan (Roda Gigi) dahulu!');
@@ -6426,6 +6856,34 @@ Daily inventory done✅
               </div>
             )}
 
+            {/* Modal konfirmasi: field kosong sebelum Kirim Telegram/WA — WAJIB diisi, atau
+                otomatis diisi 0 kalau memang sengaja kosong. TIDAK muncul saat "Simpan di
+                Cloud" (Simpan tetap boleh jalan apa adanya, cukup notifikasi non-blocking). */}
+            {showEmptyFieldsSendModal && (
+              <div className="fixed inset-0 z-[96] bg-black/50 flex items-center justify-center p-4 animate-fadeIn">
+                <div className="bg-white rounded-2xl animate-scaleIn w-full max-w-sm p-6">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-9 h-9 rounded-full bg-wheat-50 flex items-center justify-center shrink-0">
+                      <i data-lucide="alert-triangle" className="w-4 h-4 text-wheat-600"></i>
+                    </div>
+                    <h3 className="font-bold text-slate-800">Ada {emptyFieldsForModal.length} Field Kosong</h3>
+                  </div>
+                  <p className="text-xs text-slate-500 mb-2">Field berikut belum diisi. Sebelum dikirim ke {pendingSendAction === 'telegram' ? 'Telegram' : 'WhatsApp'}, field kosong akan otomatis diisi angka <b>0</b>:</p>
+                  <div className="max-h-40 overflow-y-auto bg-slate-50 border border-slate-200 rounded-xl p-2.5 mb-4">
+                    <ul className="text-[11px] text-slate-600 list-disc list-inside space-y-0.5">
+                      {emptyFieldsForModal.map((f, i) => (
+                        <li key={i}>{f.sectionLabel} — {f.label}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => { setShowEmptyFieldsSendModal(false); setPendingSendAction(null); setEmptyFieldsForModal([]); }} className="flex-1 bg-slate-100 text-slate-600 font-bold py-2.5 rounded-xl text-sm">Batal, Isi Dulu</button>
+                    <button onClick={handleConfirmFillZeroAndSend} className="flex-1 bg-purple-800 text-white font-bold py-2.5 rounded-xl text-sm">Isi 0 & Kirim</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Date Selector */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6 flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center space-x-3">
@@ -6645,17 +7103,24 @@ Daily inventory done✅
                 <div className="bg-gradient-to-br from-indigo-800 to-indigo-950 text-white rounded-2xl p-5 shadow-md">
                   <h3 className="font-bold text-base mb-1">Simpan & Kirim Laporan Harian</h3>
                   <p className="text-xs text-indigo-200 mb-4">Simpan data di memori Cloud Firebase dan bagikan langsung ke Group WhatsApp atau Telegram.</p>
-                  
+
+                  {emptyReportFieldsPreview.length > 0 && (
+                    <div className="bg-wheat-50/95 border border-wheat-500/40 text-wheat-600 text-[11px] rounded-xl p-2.5 mb-3 flex items-start gap-1.5">
+                      <i data-lucide="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5"></i>
+                      <span><b>{emptyReportFieldsPreview.length} field belum diisi.</b> Boleh disimpan dulu; wajib diisi (atau otomatis jadi 0) saat mau Kirim Telegram/WA.</span>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <button onClick={handleSaveToDevice} className="bg-white text-indigo-950 font-bold text-xs py-2.5 rounded-xl flex items-center justify-center space-x-2 shadow-sm hover:bg-slate-100 transition-colors">
                       <i data-lucide="cloud" className="w-4 h-4 text-indigo-800"></i>
                       <span>Simpan di Cloud</span>
                     </button>
-                    <button onClick={handleSendToTelegram} className="bg-sky-500 text-white font-bold text-xs py-2.5 rounded-xl flex items-center justify-center space-x-2 shadow-sm hover:bg-sky-400 transition-colors">
+                    <button onClick={() => requestSendReport('telegram')} className="bg-sky-500 text-white font-bold text-xs py-2.5 rounded-xl flex items-center justify-center space-x-2 shadow-sm hover:bg-sky-400 transition-colors">
                       <i data-lucide="send" className="w-4 h-4"></i>
                       <span>Kirim Telegram</span>
                     </button>
-                    <button onClick={handleSendToWA} className="bg-emerald-600 text-white font-bold text-xs py-2.5 rounded-xl flex items-center justify-center space-x-2 shadow-sm hover:bg-emerald-500 transition-colors">
+                    <button onClick={() => requestSendReport('wa')} className="bg-emerald-600 text-white font-bold text-xs py-2.5 rounded-xl flex items-center justify-center space-x-2 shadow-sm hover:bg-emerald-500 transition-colors">
                       <i data-lucide="share-2" className="w-4 h-4"></i>
                       <span>Kirim WA</span>
                     </button>
@@ -6849,11 +7314,23 @@ Daily inventory done✅
                   </div>
                 )}
 
+                {/* Pemberitahuan field kosong — hanya notifikasi, TIDAK menghalangi Simpan */}
+                {emptyReportFieldsPreview.length > 0 && (
+                  <div className="bg-wheat-50 border border-wheat-500/40 text-wheat-600 text-xs rounded-xl p-3 flex items-start gap-2">
+                    <i data-lucide="alert-triangle" className="w-4 h-4 shrink-0 mt-0.5"></i>
+                    <div>
+                      <p className="font-bold">{emptyReportFieldsPreview.length} field belum diisi:</p>
+                      <p className="mt-0.5">{emptyReportFieldsPreview.slice(0, 12).map(f => f.label).join(', ')}{emptyReportFieldsPreview.length > 12 ? `, +${emptyReportFieldsPreview.length - 12} lainnya` : ''}</p>
+                      <p className="text-[10px] mt-1 opacity-80">Boleh disimpan dulu apa adanya. Wajib diisi (atau otomatis diisi 0) saat mengirim langsung ke Telegram/WA.</p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Saves */}
                 <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-slate-100">
                   <button onClick={handleSaveToDevice} className="flex-1 bg-purple-800 text-white font-bold py-3 rounded-xl hover:bg-purple-900 transition-colors">Simpan di Cloud</button>
-                  <button onClick={handleSendToTelegram} className="flex-1 bg-sky-600 text-white font-bold py-3 rounded-xl hover:bg-sky-700 transition-colors">Kirim Telegram</button>
-                  <button onClick={handleSendToWA} className="flex-1 bg-emerald-600 text-white font-bold py-3 rounded-xl hover:bg-emerald-700 transition-colors">Kirim WA</button>
+                  <button onClick={() => requestSendReport('telegram')} className="flex-1 bg-sky-600 text-white font-bold py-3 rounded-xl hover:bg-sky-700 transition-colors">Kirim Telegram</button>
+                  <button onClick={() => requestSendReport('wa')} className="flex-1 bg-emerald-600 text-white font-bold py-3 rounded-xl hover:bg-emerald-700 transition-colors">Kirim WA</button>
                 </div>
               </div>
             )}
@@ -7100,6 +7577,18 @@ Daily inventory done✅
                           />
                         </div>
                       ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Pemberitahuan field kosong — hanya notifikasi, TIDAK menghalangi Simpan */}
+                {emptyReportFieldsPreview.length > 0 && (
+                  <div className="bg-wheat-50 border border-wheat-500/40 text-wheat-600 text-xs rounded-xl p-3 flex items-start gap-2">
+                    <i data-lucide="alert-triangle" className="w-4 h-4 shrink-0 mt-0.5"></i>
+                    <div>
+                      <p className="font-bold">{emptyReportFieldsPreview.length} field belum diisi (Laporan Penjualan + SO Stok):</p>
+                      <p className="mt-0.5">{emptyReportFieldsPreview.slice(0, 12).map(f => f.label).join(', ')}{emptyReportFieldsPreview.length > 12 ? `, +${emptyReportFieldsPreview.length - 12} lainnya` : ''}</p>
+                      <p className="text-[10px] mt-1 opacity-80">Boleh disimpan dulu apa adanya. Wajib diisi (atau otomatis diisi 0) saat mengirim langsung ke Telegram/WA lewat tab Laporan Penjualan.</p>
                     </div>
                   </div>
                 )}
@@ -7779,7 +8268,7 @@ Daily inventory done✅
                       <span>{isSavingFoto ? 'Menyimpan...' : 'Simpan ke Riwayat'}</span>
                     </button>
                     <button
-                      onClick={() => handleSendSingleWasteFotoToTelegram({ ...wasteFotoForm, foto: wasteFotoForm.fotoPreview, tanggal: new Date().toISOString().split('T')[0] })}
+                      onClick={handleQuickSendWasteFotoToTelegram}
                       disabled={!wasteFotoForm.fotoPreview}
                       className="bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-white font-bold py-3 px-4 rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 text-xs sm:text-sm"
                     >
