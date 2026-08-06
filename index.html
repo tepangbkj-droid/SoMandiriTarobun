@@ -124,6 +124,30 @@
     .animate-scaleIn { animation: tarobunScaleIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); }
 
     /* ========================================== */
+    /* CETAK THERMAL (Fitur Printing: Premix & Catatan Stok) */
+    /* ========================================== */
+    /* Area cetak disembunyikan di layar (hanya dipakai saat dialog print browser
+       terbuka). Trik "sembunyikan semua, tampilkan area cetak saja" ini bekerja di
+       SEMUA jenis printer (biasa/laser/inkjet/A4) MAUPUN printer thermal (58mm/80mm)
+       karena tidak menetapkan lebar kertas fisik (mm) secara paksa — ukuran kertas
+       & margin diserahkan ke driver/printer masing-masing lewat "size: auto". Layout
+       memakai font monospace + elemen bertumpuk (bukan tabel lebar tetap) supaya tetap
+       rapi baik di kertas sempit 58mm maupun kertas lebar A4/Letter. */
+    #thermalPrintArea { display: none; }
+    @media print {
+      body * { visibility: hidden !important; }
+      #thermalPrintArea, #thermalPrintArea * { visibility: visible !important; }
+      #thermalPrintArea {
+        display: block !important;
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+      }
+      @page { size: auto; margin: 3mm; }
+    }
+
+    /* ========================================== */
     /* SPLASH SCREEN (animasi masuk saat app dibuka) */
     /* ========================================== */
     @keyframes tarobunSplashLogoIn {
@@ -1512,6 +1536,7 @@ const { useState, useEffect } = React;
       { icon: 'clipboard-check', title: 'BAP (Berita Acara Penyesuaian)', desc: 'Laporkan selisih nominal antara POS dengan channel pembayaran (EDC/QRIS/Gofood/GrabFood/ShopeeFood) dan kirim ke Telegram.', target: '[data-tour="menu-bap"]' },
       { icon: 'truck', title: 'Datang Barang', desc: 'Catat barang yang baru datang dari gudang pusat, termasuk barang yang tidak sesuai.', target: '[data-tour="menu-kedatangan"]' },
       { icon: 'camera', title: 'Foto Rijek', desc: 'Unggah foto bun rijek, barang rijek, atau waste sebagai bukti dan dikirim ke Telegram.', target: '[data-tour="menu-wasteFoto"]' },
+      { icon: 'printer', title: 'Printing', desc: 'Cetak label Premix (nama barang, tanggal buat/exp, asal bahan) dan Catatan Stok (FD/toping + jumlah). Cocok untuk printer biasa maupun thermal.', target: '[data-tour="menu-printing"]' },
       { icon: 'history', title: 'Riwayat Laporan', desc: 'Lihat & unduh riwayat laporan harian yang tersimpan di Cloud.', target: '[data-tour="menu-history"]' },
       { icon: 'book-open', title: 'Panduan SOP', desc: 'Semua SOP toko ada di sini — buka menu ini kapan pun butuh mengingat langkah kerja yang benar.', target: '[data-tour="menu-sop"]' },
       { icon: 'message-circle', title: 'Chat Admin', desc: 'Hubungi admin pusat langsung lewat menu Chat jika ada kendala atau pertanyaan.', target: '[data-tour="menu-chat"]' },
@@ -1760,12 +1785,34 @@ const { useState, useEffect } = React;
       // Form state
       const [storeId, setStoreId] = useState('');
       const [token, setToken] = useState('');
+      // Kombobox "Pilih Toko" bisa dicari & discroll (bukan <select> polos lagi) supaya
+      // tidak langsung memuat/menampilkan SEMUA pilihan toko sekaligus memenuhi layar
+      // saat daftar toko banyak — daftar dibatasi tinggi (scroll) + ada input pencarian.
+      const [storeDropdownOpen, setStoreDropdownOpen] = useState(false);
+      const [storeSearchQuery, setStoreSearchQuery] = useState('');
+      const storeDropdownRef = React.useRef(null);
       const [adminPassword, setAdminPassword] = useState('');
       const [adminPassword2, setAdminPassword2] = useState('');
 
       useEffect(() => {
         scheduleLucideIcons();
       });
+
+      // Tutup dropdown "Pilih Toko" saat klik di luar area kombobox.
+      useEffect(() => {
+        const handleOutsideClick = (e) => {
+          if (storeDropdownRef.current && !storeDropdownRef.current.contains(e.target)) {
+            setStoreDropdownOpen(false);
+          }
+        };
+        document.addEventListener('mousedown', handleOutsideClick);
+        return () => document.removeEventListener('mousedown', handleOutsideClick);
+      }, []);
+
+      const filteredStoreDirectory = storeDirectory.filter(s =>
+        !storeSearchQuery.trim() || s.name.toLowerCase().includes(storeSearchQuery.trim().toLowerCase())
+      );
+      const selectedStoreName = (storeDirectory.find(s => s.id === storeId) || {}).name || '';
 
       // Ambil status admin & daftar toko. Diberi timeout + AUTO-RETRY (dengan jeda makin lama) +
       // tombol "Muat Ulang" manual, supaya kalau koneksi Firebase lambat/putus-nyambung (jaringan
@@ -2009,12 +2056,62 @@ const { useState, useEffect } = React;
 
             {mode === 'store' ? (
               <form onSubmit={handleStoreLogin} className="space-y-4">
-                <div>
+                <div ref={storeDropdownRef} className="relative">
                   <label htmlFor="storeId" className="block text-xs font-semibold text-slate-600 mb-1">Nama Toko</label>
-                  <select id="storeId" value={storeId} onChange={(e) => setStoreId(e.target.value)} className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm bg-white" required disabled={dirLoading}>
-                    <option value="">{dirLoading ? 'Memuat daftar toko...' : (storeDirectory.length === 0 ? 'Tidak ada toko terdaftar' : '-- Pilih Toko --')}</option>
-                    {storeDirectory.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
+                  {/* Kombobox kustom (bukan <select> polos): daftar toko dibatasi tinggi & bisa
+                      discroll, plus ada kolom pencarian, supaya saat toko banyak tidak langsung
+                      memenuhi layar dan lebih mudah ditemukan. Input tersembunyi 'storeId' tetap
+                      dipertahankan untuk validasi form (required) & submit. */}
+                  <input type="hidden" id="storeId" value={storeId} />
+                  <button
+                    type="button"
+                    disabled={dirLoading}
+                    onClick={() => setStoreDropdownOpen(o => !o)}
+                    className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm bg-white flex items-center justify-between gap-2 disabled:opacity-60 text-left"
+                  >
+                    <span className={`truncate ${selectedStoreName ? 'text-slate-800' : 'text-slate-400'}`}>
+                      {dirLoading ? 'Memuat daftar toko...' : (selectedStoreName || (storeDirectory.length === 0 ? 'Tidak ada toko terdaftar' : '-- Pilih Toko --'))}
+                    </span>
+                    <i data-lucide="chevron-down" className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${storeDropdownOpen ? 'rotate-180' : ''}`}></i>
+                  </button>
+
+                  {storeDropdownOpen && !dirLoading && (
+                    <div className="absolute z-30 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg animate-fadeIn overflow-hidden">
+                      {storeDirectory.length > 5 && (
+                        <div className="p-2 border-b border-slate-100">
+                          <div className="relative">
+                            <i data-lucide="search" className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+                            <input
+                              type="text"
+                              autoFocus
+                              value={storeSearchQuery}
+                              onChange={(e) => setStoreSearchQuery(e.target.value)}
+                              placeholder="Cari nama toko..."
+                              className="w-full pl-8 pr-2.5 py-1.5 border border-slate-300 rounded-lg text-xs"
+                            />
+                          </div>
+                        </div>
+                      )}
+                      <ul className="max-h-56 overflow-y-auto py-1">
+                        {filteredStoreDirectory.length === 0 && (
+                          <li className="px-3 py-2.5 text-xs text-slate-400 text-center">
+                            {storeDirectory.length === 0 ? 'Tidak ada toko terdaftar' : `Tidak ada toko yang cocok dengan "${storeSearchQuery}".`}
+                          </li>
+                        )}
+                        {filteredStoreDirectory.map(s => (
+                          <li key={s.id}>
+                            <button
+                              type="button"
+                              onClick={() => { setStoreId(s.id); setStoreDropdownOpen(false); setStoreSearchQuery(''); }}
+                              className={`w-full text-left px-3 py-2 text-sm truncate ${storeId === s.id ? 'bg-purple-50 text-purple-800 font-semibold' : 'text-slate-700 hover:bg-slate-50'}`}
+                            >
+                              {s.name}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label htmlFor="token" className="block text-xs font-semibold text-slate-600 mb-1">Token Toko</label>
@@ -4385,6 +4482,75 @@ const { useState, useEffect } = React;
         setShowMandatoryChecklist(true);
       };
       const [unreadChat, setUnreadChat] = useState(0);
+
+      // ==========================================
+      // FITUR PRINTING: Label Premix & Catatan Stok
+      // ==========================================
+      // Dua sub-fitur cetak (thermal-friendly, lihat CSS #thermalPrintArea di <style> global):
+      // 1) Premix: label per-item (Nama Toko, Nama Barang, Tanggal Buat, Tanggal Exp, Asal Bahan Produksi).
+      // 2) Catatan Stok: daftar item (FD/Toping) + jumlah + satuan (Bag/Pcs), bisa tambah berkali-kali lalu dicetak sekaligus.
+      const PRINTING_ITEM_OPTIONS = ['FD', 'Toping Taro', 'Coklat', 'Vanila', 'Peach', 'Rasberi', 'Lemon', 'Nanas'];
+      const [printingSubTab, setPrintingSubTab] = useState('premix');
+
+      const [premixForm, setPremixForm] = useState({ namaToko: storeName || '', namaBarang: '', tanggalBuat: '', tanggalExp: '', asalBahan: '' });
+      const [premixPrintData, setPremixPrintData] = useState(null);
+
+      const [stockNoteStore, setStockNoteStore] = useState(storeName || '');
+      const [stockNoteItems, setStockNoteItems] = useState([]); // [{ id, nama, jumlah, satuan }]
+      const [stockItemDraft, setStockItemDraft] = useState({ nama: PRINTING_ITEM_OPTIONS[0], jumlah: '', satuan: 'Bag' });
+      const [stockPrintData, setStockPrintData] = useState(null);
+
+      const handlePremixFormChange = (field, value) => setPremixForm(prev => ({ ...prev, [field]: value }));
+
+      const handlePremixPrint = (e) => {
+        e.preventDefault();
+        if (!premixForm.namaToko.trim() || !premixForm.namaBarang.trim() || !premixForm.tanggalBuat || !premixForm.tanggalExp) {
+          setNotification({ type: 'error', message: 'Lengkapi Nama Toko, Nama Barang, Tanggal Buat & Tanggal Exp terlebih dahulu.' });
+          return;
+        }
+        setPremixPrintData({ ...premixForm });
+      };
+
+      // Begitu data cetak premix siap, panggil dialog print browser. Dialog print bawaan
+      // browser inilah yang berkomunikasi dengan driver printer apa pun yang terpasang di
+      // perangkat (thermal 58mm/80mm via Bluetooth/USB, maupun printer biasa/A4).
+      useEffect(() => {
+        if (premixPrintData) {
+          const t = setTimeout(() => window.print(), 150);
+          return () => clearTimeout(t);
+        }
+      }, [premixPrintData]);
+
+      const addStockNoteItem = () => {
+        const jumlahNum = Number(stockItemDraft.jumlah);
+        if (!stockItemDraft.jumlah || isNaN(jumlahNum) || jumlahNum <= 0) {
+          setNotification({ type: 'error', message: 'Isi jumlah yang valid (lebih dari 0) sebelum menambahkan item.' });
+          return;
+        }
+        setStockNoteItems(prev => [...prev, { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, nama: stockItemDraft.nama, jumlah: jumlahNum, satuan: stockItemDraft.satuan }]);
+        setStockItemDraft(prev => ({ ...prev, jumlah: '' }));
+      };
+
+      const removeStockNoteItem = (id) => setStockNoteItems(prev => prev.filter(it => it.id !== id));
+
+      const handleStockNotePrint = () => {
+        if (!stockNoteStore.trim()) {
+          setNotification({ type: 'error', message: 'Isi Nama Toko terlebih dahulu.' });
+          return;
+        }
+        if (stockNoteItems.length === 0) {
+          setNotification({ type: 'error', message: 'Tambahkan minimal 1 item sebelum mencetak.' });
+          return;
+        }
+        setStockPrintData({ namaToko: stockNoteStore, items: stockNoteItems, tanggalCetak: new Date() });
+      };
+
+      useEffect(() => {
+        if (stockPrintData) {
+          const t = setTimeout(() => window.print(), 150);
+          return () => clearTimeout(t);
+        }
+      }, [stockPrintData]);
 
       // ==========================================
       // STATUS KONEKSI JARINGAN (sisi Toko)
@@ -6776,6 +6942,10 @@ Daily inventory done✅
                     <span>Foto Rijek</span>
                     <span className="ml-auto text-[10px] bg-rose-100 text-rose-700 font-bold px-1.5 py-0.5 rounded-md">{wasteFotoList.length}</span>
                   </button>
+                  <button data-tour="menu-printing" onClick={() => { setActiveTab('printing'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${activeTab === 'printing' ? 'bg-purple-50 text-purple-800' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="printer" className="w-4 h-4"></i>
+                    <span>Printing</span>
+                  </button>
                   <button data-tour="menu-history" onClick={() => { setActiveTab('history'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${activeTab === 'history' ? 'bg-purple-50 text-purple-800' : 'text-slate-600 hover:bg-slate-50'}`}>
                     <i data-lucide="history" className="w-4 h-4"></i>
                     <span>Riwayat Laporan</span>
@@ -8388,6 +8558,137 @@ Daily inventory done✅
                 </div>
               </div>
             )}
+
+            {/* Tab: Printing (Premix & Catatan Stok) */}
+            {activeTab === 'printing' && (
+              <div className="space-y-4">
+                <div>
+                  <h2 className="font-bold text-slate-700 text-base flex items-center gap-2">
+                    <i data-lucide="printer" className="w-4 h-4 text-purple-700"></i>
+                    <span>Printing</span>
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-1">Cetak label Premix atau Catatan Stok. Kompatibel dengan printer biasa maupun printer thermal (58mm/80mm).</p>
+                </div>
+
+                <div className="flex bg-slate-100 rounded-xl p-1 gap-1">
+                  <button onClick={() => setPrintingSubTab('premix')} className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${printingSubTab === 'premix' ? 'bg-white text-purple-800 shadow-sm' : 'text-slate-500'}`}>Premix</button>
+                  <button onClick={() => setPrintingSubTab('stock')} className={`flex-1 text-xs font-bold py-2 rounded-lg transition-all ${printingSubTab === 'stock' ? 'bg-white text-purple-800 shadow-sm' : 'text-slate-500'}`}>Catatan Stok</button>
+                </div>
+
+                {printingSubTab === 'premix' && (
+                  <form onSubmit={handlePremixPrint} className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Nama Toko</label>
+                      <input type="text" value={premixForm.namaToko} onChange={(e) => handlePremixFormChange('namaToko', e.target.value)} className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm" required />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Nama Barang</label>
+                      <input type="text" value={premixForm.namaBarang} onChange={(e) => handlePremixFormChange('namaBarang', e.target.value)} placeholder="Contoh: Premix Coklat" className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm" required />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Tanggal Buat</label>
+                        <input type="date" value={premixForm.tanggalBuat} onChange={(e) => handlePremixFormChange('tanggalBuat', e.target.value)} className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm" required />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Tanggal Exp</label>
+                        <input type="date" value={premixForm.tanggalExp} onChange={(e) => handlePremixFormChange('tanggalExp', e.target.value)} className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm" required />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Asal Bahan Produksi</label>
+                      <input type="text" value={premixForm.asalBahan} onChange={(e) => handlePremixFormChange('asalBahan', e.target.value)} placeholder="Contoh: Gudang Pusat / Dapur Toko" className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm" />
+                    </div>
+                    <button type="submit" className="w-full bg-purple-800 hover:bg-purple-900 text-white font-bold py-3 rounded-xl text-sm flex items-center justify-center gap-2">
+                      <i data-lucide="printer" className="w-4 h-4"></i>
+                      <span>Cetak Label Premix</span>
+                    </button>
+                  </form>
+                )}
+
+                {printingSubTab === 'stock' && (
+                  <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Nama Toko</label>
+                      <input type="text" value={stockNoteStore} onChange={(e) => setStockNoteStore(e.target.value)} className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm" required />
+                    </div>
+
+                    <div className="border border-slate-200 rounded-xl p-3 space-y-3">
+                      <p className="text-xs font-semibold text-slate-600">Tambah Item</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <select value={stockItemDraft.nama} onChange={(e) => setStockItemDraft(prev => ({ ...prev, nama: e.target.value }))} className="col-span-2 w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm bg-white">
+                          {PRINTING_ITEM_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                        </select>
+                        <input type="number" min="1" value={stockItemDraft.jumlah} onChange={(e) => setStockItemDraft(prev => ({ ...prev, jumlah: e.target.value }))} placeholder="Jumlah" className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm" />
+                        <select value={stockItemDraft.satuan} onChange={(e) => setStockItemDraft(prev => ({ ...prev, satuan: e.target.value }))} className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm bg-white">
+                          <option value="Bag">Bag</option>
+                          <option value="Pcs">Pcs</option>
+                        </select>
+                      </div>
+                      <button type="button" onClick={addStockNoteItem} className="w-full bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-100 font-bold py-2 rounded-xl text-xs flex items-center justify-center gap-1.5">
+                        <i data-lucide="plus" className="w-3.5 h-3.5"></i>
+                        <span>Tambah Item</span>
+                      </button>
+                    </div>
+
+                    {stockNoteItems.length > 0 && (
+                      <div className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden">
+                        {stockNoteItems.map(it => (
+                          <div key={it.id} className="flex items-center justify-between px-3 py-2.5">
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-slate-700 truncate">{it.nama}</p>
+                              <p className="text-xs text-slate-500">{it.jumlah} {it.satuan}</p>
+                            </div>
+                            <button onClick={() => removeStockNoteItem(it.id)} className="text-rose-600 hover:bg-rose-50 p-1.5 rounded-lg border border-rose-100 shrink-0">
+                              <i data-lucide="trash-2" className="w-3.5 h-3.5"></i>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <button onClick={handleStockNotePrint} disabled={stockNoteItems.length === 0} className="w-full bg-purple-800 hover:bg-purple-900 disabled:opacity-50 text-white font-bold py-3 rounded-xl text-sm flex items-center justify-center gap-2">
+                      <i data-lucide="printer" className="w-4 h-4"></i>
+                      <span>Cetak Catatan Stok</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Area cetak tersembunyi (hanya tampil saat dialog print browser terbuka, lihat CSS
+                #thermalPrintArea @media print di <style> global). Font monospace + layout
+                bertumpuk agar cocok baik dicetak di kertas thermal 58mm/80mm maupun kertas biasa. */}
+            <div id="thermalPrintArea">
+              {premixPrintData && (
+                <div style={{ fontFamily: "'Courier New', monospace", fontSize: '12px', width: '100%', color: '#000' }}>
+                  <div style={{ textAlign: 'center', fontWeight: 'bold', fontSize: '14px', marginBottom: '6px' }}>LABEL PREMIX</div>
+                  <div style={{ borderTop: '1px dashed #000', margin: '4px 0' }}></div>
+                  <div style={{ marginBottom: '3px' }}><b>Nama Toko:</b> {premixPrintData.namaToko}</div>
+                  <div style={{ marginBottom: '3px' }}><b>Nama Barang:</b> {premixPrintData.namaBarang}</div>
+                  <div style={{ marginBottom: '3px' }}><b>Tanggal Buat:</b> {formatIndonesianDate(premixPrintData.tanggalBuat)}</div>
+                  <div style={{ marginBottom: '3px' }}><b>Tanggal Exp:</b> {formatIndonesianDate(premixPrintData.tanggalExp)}</div>
+                  <div style={{ marginBottom: '3px' }}><b>Asal Bahan Produksi:</b> {premixPrintData.asalBahan || '-'}</div>
+                  <div style={{ borderTop: '1px dashed #000', margin: '4px 0' }}></div>
+                </div>
+              )}
+              {stockPrintData && (
+                <div style={{ fontFamily: "'Courier New', monospace", fontSize: '12px', width: '100%', color: '#000' }}>
+                  <div style={{ textAlign: 'center', fontWeight: 'bold', fontSize: '14px', marginBottom: '6px' }}>CATATAN STOK</div>
+                  <div style={{ borderTop: '1px dashed #000', margin: '4px 0' }}></div>
+                  <div style={{ marginBottom: '3px' }}><b>Nama Toko:</b> {stockPrintData.namaToko}</div>
+                  <div style={{ marginBottom: '3px' }}><b>Tanggal:</b> {stockPrintData.tanggalCetak.toLocaleString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+                  <div style={{ borderTop: '1px dashed #000', margin: '4px 0' }}></div>
+                  {stockPrintData.items.map((it, idx) => (
+                    <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
+                      <span>{idx + 1}. {it.nama}</span>
+                      <span>{it.jumlah} {it.satuan}</span>
+                    </div>
+                  ))}
+                  <div style={{ borderTop: '1px dashed #000', margin: '4px 0' }}></div>
+                </div>
+              )}
+            </div>
 
             {/* Tab: History */}
             {activeTab === 'history' && (
