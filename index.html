@@ -6926,16 +6926,24 @@ Daily inventory done✅
       return (
         <div className="min-h-screen bg-slate-50 text-slate-800">
           {showUpdatePopup && systemUpdate && (
-            <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4 animate-fadeIn">
-              <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-purple-100 animate-scaleIn">
-                <div className="w-14 h-14 rounded-full bg-purple-100 flex items-center justify-center text-2xl mx-auto mb-4">
+            // RESPONSIF (fix): sebelumnya kartu ini tidak punya batas tinggi/scroll, jadi kalau
+            // teks update panjang (banyak baris/emoji), di layar HP (bukan mode desktop, viewport
+            // pendek) kartu bisa melebihi tinggi layar — bagian atas/tombol "Paham" jadi terpotong
+            // dan tidak terjangkau. Sekarang: overlay boleh discroll (overflow-y-auto + py-6) dan
+            // kartu dibatasi max-h-[85vh] dengan area teks (bukan seluruh kartu) yang discroll
+            // sendiri, supaya ikon & tombol "Paham" tetap selalu terlihat/terjangkau di kartu yang sama.
+            <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4 py-6 overflow-y-auto animate-fadeIn">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-purple-100 animate-scaleIn max-h-[85vh] flex flex-col">
+                <div className="w-14 h-14 rounded-full bg-purple-100 flex items-center justify-center text-2xl mx-auto mb-4 shrink-0">
                   📢
                 </div>
-                <h3 className="text-center font-bold text-slate-800 text-base mb-2">Update Sistem</h3>
-                <p className="text-center text-sm text-slate-600 whitespace-pre-line mb-5">{systemUpdate.text}</p>
+                <h3 className="text-center font-bold text-slate-800 text-base mb-2 shrink-0">Update Sistem</h3>
+                <div className="overflow-y-auto min-h-0 mb-5 pr-1">
+                  <p className="text-center text-sm text-slate-600 whitespace-pre-line">{systemUpdate.text}</p>
+                </div>
                 <button
                   onClick={dismissSystemUpdate}
-                  className="w-full bg-purple-800 hover:bg-purple-900 text-white font-bold py-3 rounded-xl text-sm transition-all"
+                  className="w-full bg-purple-800 hover:bg-purple-900 text-white font-bold py-3 rounded-xl text-sm transition-all shrink-0"
                 >
                   Paham
                 </button>
