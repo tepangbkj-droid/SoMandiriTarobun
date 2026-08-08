@@ -2103,6 +2103,10 @@ const { useState, useEffect } = React;
     function AdminPsikotesTab({ stores }) {
       const [tests, setTests] = useState([]);
       const [loading, setLoading] = useState(true);
+      const [loadError, setLoadError] = useState(''); // BUGFIX: sebelumnya kalau fetch gagal (mis.
+      // CORS/koneksi bermasalah di APK), tab ini diam saja tanpa keterangan apa pun -- pengguna
+      // melihat tab "kosong"/tidak merespons dan mengiranya error. Sekarang kegagalan ditangkap &
+      // ditampilkan jelas + ada tombol coba lagi.
       const [showCreate, setShowCreate] = useState(false);
       const [newTitle, setNewTitle] = useState('');
       const [newDesc, setNewDesc] = useState('');
@@ -2113,10 +2117,16 @@ const { useState, useEffect } = React;
 
       const loadTests = async () => {
         setLoading(true);
+        setLoadError('');
         try {
           const res = await __apiFetch(`${WORKER_BASE}/api/psikotes/tests`, { headers: __authHeaders() });
-          const data = await res.json();
-          if (res.ok) setTests(data.tests);
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) { setTests(data.tests || []); }
+          else { setLoadError(data.error || `Gagal memuat paket psikotes (status ${res.status}).`); }
+        } catch (err) {
+          // Biasanya fetch gagal total (bukan cuma respons error) kalau koneksi terputus atau
+          // origin APK belum diizinkan di pengaturan CORS server (ALLOWED_ORIGIN).
+          setLoadError('Gagal terhubung ke server. Periksa koneksi internet, atau hubungi admin teknis kalau ini terjadi terus-menerus di aplikasi APK.');
         } finally { setLoading(false); }
       };
       useEffect(() => { loadTests(); }, []);
@@ -2152,10 +2162,32 @@ const { useState, useEffect } = React;
 
       const copyLink = (test) => {
         const link = `${window.location.origin}${window.location.pathname}?psikotes=${test.link_token}`;
-        navigator.clipboard.writeText(link).then(() => {
-          setLinkCopied(test.id);
-          setTimeout(() => setLinkCopied(null), 2000);
-        });
+        // BUGFIX: navigator.clipboard bisa TIDAK ADA / ditolak diam-diam di sebagian WebView APK
+        // (Capacitor) kalau permission clipboard belum diberikan atau API-nya tidak didukung --
+        // sebelumnya ini bisa melempar error tak tertangani saat tombol "Salin Link" ditekan.
+        // Sekarang: coba Clipboard API dulu, kalau tidak tersedia/gagal, pakai fallback
+        // textarea+execCommand (didukung hampir semua WebView lama).
+        const markCopied = () => { setLinkCopied(test.id); setTimeout(() => setLinkCopied(null), 2000); };
+        const fallbackCopy = () => {
+          try {
+            const ta = document.createElement('textarea');
+            ta.value = link;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.focus(); ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            markCopied();
+          } catch (err) {
+            window.prompt('Salin link ini secara manual:', link);
+          }
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(link).then(markCopied).catch(fallbackCopy);
+        } else {
+          fallbackCopy();
+        }
       };
 
       if (editingTest) {
@@ -2188,6 +2220,12 @@ const { useState, useEffect } = React;
 
           {loading ? (
             <div className="text-center text-slate-400 text-sm py-8"><i data-lucide="loader" className="w-6 h-6 animate-spin mx-auto"></i></div>
+          ) : loadError ? (
+            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-6 text-center space-y-3">
+              <i data-lucide="alert-triangle" className="w-6 h-6 text-rose-500 mx-auto"></i>
+              <p className="text-xs text-rose-700 font-semibold">{loadError}</p>
+              <button onClick={loadTests} className="bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold px-4 py-2 rounded-xl">Coba Lagi</button>
+            </div>
           ) : tests.length === 0 ? (
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center text-slate-500 text-sm">Belum ada paket psikotes. Klik "Buat Psikotes" untuk mulai.</div>
           ) : (
@@ -2812,7 +2850,7 @@ const { useState, useEffect } = React;
 
                   {storeDropdownOpen && !dirLoading && (
                     <div className="absolute z-30 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg animate-fadeIn overflow-hidden">
-                      {storeDirectory.length > 5 && (
+                      {storeDirectory.length > 4 && (
                         <div className="p-2 border-b border-slate-100">
                           <div className="relative">
                             <i data-lucide="search" className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"></i>
@@ -2827,7 +2865,10 @@ const { useState, useEffect } = React;
                           </div>
                         </div>
                       )}
-                      <ul className="max-h-56 overflow-y-auto py-1">
+                      {/* Dibatasi tinggi supaya HANYA ~4 toko yang terlihat sekaligus (tidak lagi
+                          memenuhi/menutupi layar saat daftar toko banyak) -- sisanya wajib discroll
+                          atau dicari lewat kotak pencarian di atas. */}
+                      <ul className="max-h-[168px] overflow-y-auto py-1 overscroll-contain">
                         {filteredStoreDirectory.length === 0 && (
                           <li className="px-3 py-2.5 text-xs text-slate-400 text-center">
                             {storeDirectory.length === 0 ? 'Tidak ada toko terdaftar' : `Tidak ada toko yang cocok dengan "${storeSearchQuery}".`}
@@ -9816,16 +9857,25 @@ Daily inventory done✅
     function StorePsikotesTab() {
       const [attempts, setAttempts] = useState([]);
       const [loading, setLoading] = useState(true);
+      const [loadError, setLoadError] = useState(''); // BUGFIX: sebelumnya kalau gagal memuat
+      // (koneksi putus, sesi kadaluarsa, atau origin APK belum diizinkan di server), tab ini
+      // hanya diam menampilkan "Belum ada OJT..." tanpa keterangan -- terlihat seperti error/tidak
+      // bisa dibuka padahal sebenarnya gagal ambil data. Sekarang errornya ditampilkan jelas.
       const [detailId, setDetailId] = useState(null); // attempt id yang riwayat jawabannya sedang dibuka
       const [detailAnswers, setDetailAnswers] = useState(null);
       const [detailLoading, setDetailLoading] = useState(false);
 
       const load = async () => {
         setLoading(true);
+        setLoadError('');
         try {
           const res = await __apiFetch(`${WORKER_BASE}/api/store/psikotes/attempts`, { headers: __authHeaders() });
-          const data = await res.json();
-          if (res.ok) setAttempts(data.attempts);
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) { setAttempts(data.attempts || []); }
+          else if (res.status === 401) { setLoadError('Sesi login sudah berakhir. Silakan keluar lalu masuk (login) lagi.'); }
+          else { setLoadError(data.error || `Gagal memuat data (status ${res.status}).`); }
+        } catch (err) {
+          setLoadError('Gagal terhubung ke server. Periksa koneksi internet lalu coba lagi.');
         } finally { setLoading(false); }
       };
       useEffect(() => { load(); }, []);
@@ -9837,8 +9887,11 @@ Daily inventory done✅
         setDetailLoading(true);
         try {
           const res = await __apiFetch(`${WORKER_BASE}/api/store/psikotes/attempts/${attemptId}/answers`, { headers: __authHeaders() });
-          const data = await res.json();
-          if (res.ok) setDetailAnswers(data.answers);
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) setDetailAnswers(data.answers || []);
+          else setDetailAnswers([]);
+        } catch (err) {
+          setDetailAnswers([]);
         } finally { setDetailLoading(false); }
       };
 
@@ -9857,6 +9910,12 @@ Daily inventory done✅
 
           {loading ? (
             <div className="text-center text-slate-400 text-sm py-8"><i data-lucide="loader" className="w-6 h-6 animate-spin mx-auto"></i></div>
+          ) : loadError ? (
+            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-6 text-center space-y-3">
+              <i data-lucide="alert-triangle" className="w-6 h-6 text-rose-500 mx-auto"></i>
+              <p className="text-xs text-rose-700 font-semibold">{loadError}</p>
+              <button onClick={load} className="bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold px-4 py-2 rounded-xl">Coba Lagi</button>
+            </div>
           ) : attempts.length === 0 ? (
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center text-slate-500 text-sm">Belum ada OJT yang didaftarkan admin ke toko ini.</div>
           ) : (
@@ -10084,16 +10143,41 @@ Daily inventory done✅
     class AppErrorBoundary extends React.Component {
       constructor(props) {
         super(props);
-        this.state = { hasError: false, errorInfo: '' };
+        this.state = { hasError: false, errorInfo: '', errorStack: '', showDetail: false };
       }
       static getDerivedStateFromError(error) {
-        return { hasError: true, errorInfo: (error && error.message) ? error.message : String(error) };
+        return {
+          hasError: true,
+          errorInfo: (error && error.message) ? error.message : String(error),
+          errorStack: (error && error.stack) ? error.stack : '',
+        };
       }
       componentDidCatch(error, info) {
         console.error('Tarobun App Error (ditangkap ErrorBoundary):', error, info);
       }
       handleReload = () => {
-        this.setState({ hasError: false, errorInfo: '' });
+        this.setState({ hasError: false, errorInfo: '', errorStack: '', showDetail: false });
+        window.location.reload();
+      };
+      // BUGFIX: sebelumnya satu-satunya opsi pemulihan adalah "muat ulang" biasa, yang TIDAK
+      // membantu kalau penyebab error justru data cache lokal yang sudah usang/tidak cocok lagi
+      // dengan versi aplikasi terbaru (localStorage tarobun_*, atau Service Worker yang menyimpan
+      // versi lama file). Tombol ini membersihkan cache lokal & Service Worker dulu sebelum muat
+      // ulang, supaya aplikasi benar-benar mengambil versi & data terbaru dari server.
+      handleHardReset = async () => {
+        try {
+          Object.keys(localStorage).forEach(k => { if (k.startsWith('tarobun_')) localStorage.removeItem(k); });
+        } catch (e) {}
+        try {
+          if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map(r => r.unregister()));
+          }
+          if ('caches' in window) {
+            const keys = await caches.keys();
+            await Promise.all(keys.map(k => caches.delete(k)));
+          }
+        } catch (e) {}
         window.location.reload();
       };
       render() {
@@ -10114,6 +10198,23 @@ Daily inventory done✅
                 >
                   Muat Ulang Halaman
                 </button>
+                <button
+                  onClick={this.handleHardReset}
+                  className="w-full bg-white border border-slate-300 hover:bg-slate-50 text-slate-600 font-bold py-2.5 rounded-xl text-sm"
+                >
+                  Bersihkan Cache &amp; Muat Ulang
+                </button>
+                <p className="text-[10px] text-slate-400">Kalau kendala terus terjadi setelah "Bersihkan Cache", pakai tombol ini lalu tunjukkan detail teknis di bawah ke admin.</p>
+                <button
+                  type="button"
+                  onClick={() => this.setState(s => ({ showDetail: !s.showDetail }))}
+                  className="text-[10px] text-slate-400 underline"
+                >
+                  {this.state.showDetail ? 'Sembunyikan detail teknis' : 'Lihat detail teknis'}
+                </button>
+                {this.state.showDetail && (
+                  <pre className="text-left text-[9px] text-rose-600 bg-rose-50 rounded-lg p-2 max-h-32 overflow-auto whitespace-pre-wrap break-words">{this.state.errorInfo}{this.state.errorStack ? '\n' + this.state.errorStack : ''}</pre>
+                )}
               </div>
             </div>
           );
