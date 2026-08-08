@@ -7655,13 +7655,17 @@ Daily inventory done✅
       };
 
       // Kirim foto ke Telegram sekali percobaan (dipakai internal oleh sendPhotoToTelegram)
-      const sendPhotoToTelegramOnce = async (base64DataUrl, caption, token, chatId) => {
-        const blob = dataUrlToBlob(base64DataUrl);
+      const sendPhotoToTelegramOnce = async (photoSrc, caption, token, chatId) => {
         const formData = new FormData();
         formData.append('chat_id', chatId);
         formData.append('caption', caption);
         formData.append('parse_mode', 'Markdown');
-        formData.append('photo', blob, 'foto.jpg');
+        if (/^data:/.test(photoSrc)) {
+          const blob = dataUrlToBlob(photoSrc);
+          formData.append('photo', blob, 'foto.jpg');
+        } else {
+          formData.append('photo', photoSrc);
+        }
 
         // Batasi waktu tunggu agar tidak menggantung tanpa batas saat koneksi HP lemah/lambat
         const controller = new AbortController();
