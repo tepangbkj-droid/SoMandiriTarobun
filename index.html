@@ -1813,13 +1813,19 @@ const { useState, useEffect } = React;
     // sepenuhnya (itu kontrol milik user, bukan website) -- yang bisa dilakukan hanya
     // MENDETEKSI ketika itu terjadi lalu mengunci attempt-nya sampai admin buka blokir,
     // bukan benar-benar mencegah user pindah tab secara fisik.
-    function PsikotesOjtPublicPage({ linkToken }) {
+    function PsikotesOjtPublicPage({ linkToken, assigned }) {
+      // assigned=true -> link per-OJT yang didaftarkan admin (nama+toko sudah pasti, lewat
+      // ?ojt=TOKEN). assigned=false -> link umum satu paket (alur lama, lewat ?psikotes=TOKEN),
+      // OJT isi sendiri nama+penempatan.
       const storageKey = `tarobun_psikotes_attempt_${linkToken}`;
-      const [phase, setPhase] = useState('loading'); // loading | form | taking | blocked | done | error
+      const infoUrl = assigned ? `${WORKER_BASE}/api/psikotes/public/ojt/${linkToken}` : `${WORKER_BASE}/api/psikotes/public/${linkToken}`;
+      const startUrl = assigned ? `${WORKER_BASE}/api/psikotes/public/ojt/${linkToken}/start` : `${WORKER_BASE}/api/psikotes/public/${linkToken}/start`;
+      const [phase, setPhase] = useState('loading'); // loading | form | confirm | taking | blocked | done | error
       const [errorMsg, setErrorMsg] = useState('');
       const [test, setTest] = useState(null);
       const [name, setName] = useState('');
       const [penempatan, setPenempatan] = useState('');
+      const [assignedInfo, setAssignedInfo] = useState(null); // { ojtName, storeName }
       const [submittingStart, setSubmittingStart] = useState(false);
       const [attempt, setAttempt] = useState(null); // { attemptId, attemptSecret }
       const [questions, setQuestions] = useState([]);
@@ -1832,10 +1838,11 @@ const { useState, useEffect } = React;
       useEffect(() => {
         (async () => {
           try {
-            const res = await fetch(`${WORKER_BASE}/api/psikotes/public/${linkToken}`);
+            const res = await fetch(infoUrl);
             const data = await res.json();
             if (!res.ok) { setErrorMsg(data.error || 'Link tidak valid'); setPhase('error'); return; }
             setTest(data.test);
+            if (assigned) setAssignedInfo({ ojtName: data.ojtName, storeName: data.storeName });
             // Kalau OJT sebelumnya sempat memulai (refresh halaman tanpa sengaja), lanjutkan
             // dari attempt yang sama, bukan mulai dari nol -- ambil dari localStorage.
             const saved = localStorage.getItem(storageKey);
@@ -1850,7 +1857,15 @@ const { useState, useEffect } = React;
                 }
               } catch (e) { /* kalau gagal cek, biarkan lanjut ke form biasa */ }
             }
-            setPhase(data.test.locked ? 'locked' : 'form');
+            // Link per-OJT yang sudah dipakai (tapi tidak ada sesi tersimpan di browser ini,
+            // berarti dibuka dari perangkat lain) -- tolak, supaya 1 link = 1 orang.
+            if (assigned && data.alreadyUsed) {
+              setErrorMsg('Link ini sudah pernah dipakai untuk memulai psikotes. Kalau ini bukan kamu, hubungi admin/toko.');
+              setPhase('error');
+              return;
+            }
+            if (data.test.locked) { setPhase('locked'); return; }
+            setPhase(assigned ? 'confirm' : 'form');
           } catch (e) {
             setErrorMsg('Gagal memuat halaman psikotes. Periksa koneksi internet.');
             setPhase('error');
@@ -1859,12 +1874,12 @@ const { useState, useEffect } = React;
       }, [linkToken]);
 
       const handleStart = async () => {
-        if (!name.trim() || !penempatan.trim()) return;
+        if (!assigned && (!name.trim() || !penempatan.trim())) return;
         setSubmittingStart(true);
         try {
-          const res = await fetch(`${WORKER_BASE}/api/psikotes/public/${linkToken}/start`, {
+          const res = await fetch(startUrl, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: name.trim(), penempatan: penempatan.trim() }),
+            body: JSON.stringify(assigned ? {} : { name: name.trim(), penempatan: penempatan.trim() }),
           });
           const data = await res.json();
           if (!res.ok) { setErrorMsg(data.error || 'Gagal memulai psikotes'); setSubmittingStart(false); return; }
@@ -1980,6 +1995,27 @@ const { useState, useEffect } = React;
           <p className="text-sm text-slate-500">Terima kasih, jawabanmu sudah tersimpan. Hasilnya akan direview oleh admin/toko.</p>
         </div></Shell>;
       }
+      if (phase === 'confirm') {
+        // Link per-OJT dari admin: nama & toko sudah pasti (read-only), tidak ada form isian.
+        return <Shell><div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+          <div className="text-center space-y-1">
+            <i data-lucide="clipboard-list" className="w-9 h-9 text-purple-700 mx-auto"></i>
+            <h2 className="font-bold text-slate-800 text-lg">{test?.title}</h2>
+            {test?.description && <p className="text-xs text-slate-500">{test.description}</p>}
+          </div>
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1.5">
+            <div className="flex justify-between text-xs"><span className="text-slate-500">Nama</span><span className="font-semibold text-slate-800">{assignedInfo?.ojtName}</span></div>
+            <div className="flex justify-between text-xs"><span className="text-slate-500">Penempatan Toko</span><span className="font-semibold text-slate-800">{assignedInfo?.storeName}</span></div>
+          </div>
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
+            Setelah mulai, jangan pindah tab/aplikasi lain sampai selesai — kalau keluar, akses akan otomatis diblokir dan butuh izin admin untuk dibuka lagi. Link ini hanya bisa dipakai satu kali.
+          </div>
+          {errorMsg && <p className="text-xs text-rose-600">{errorMsg}</p>}
+          <button onClick={handleStart} disabled={submittingStart} className="w-full bg-purple-800 hover:bg-purple-900 disabled:opacity-50 text-white font-bold py-3 rounded-xl text-sm">
+            {submittingStart ? 'Memulai...' : 'Mulai Psikotes'}
+          </button>
+        </div></Shell>;
+      }
       if (phase === 'form') {
         return <Shell><div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
           <div className="text-center space-y-1">
@@ -2064,7 +2100,7 @@ const { useState, useEffect } = React;
     // ==========================================
     // ADMIN: Tab "Psikotes OJT" -- kelola paket psikotes, soal, dan hasil OJT
     // ==========================================
-    function AdminPsikotesTab() {
+    function AdminPsikotesTab({ stores }) {
       const [tests, setTests] = useState([]);
       const [loading, setLoading] = useState(true);
       const [showCreate, setShowCreate] = useState(false);
@@ -2126,7 +2162,7 @@ const { useState, useEffect } = React;
         return <PsikotesQuestionEditor test={editingTest} onBack={() => { setEditingTest(null); loadTests(); }} />;
       }
       if (viewingScores) {
-        return <PsikotesScoresView test={viewingScores} onBack={() => setViewingScores(null)} />;
+        return <PsikotesScoresView test={viewingScores} stores={stores} onBack={() => setViewingScores(null)} />;
       }
 
       return (
@@ -2272,9 +2308,19 @@ const { useState, useEffect } = React;
     }
 
     // Daftar hasil/skor OJT untuk satu paket psikotes, dengan tombol buka blokir.
-    function PsikotesScoresView({ test, onBack }) {
+    // Juga berisi bagian "Daftarkan OJT ke Toko" -- admin pilih toko + nama OJT, sistem
+    // buatkan link khusus 1 OJT itu; begitu selesai dikerjakan skornya otomatis nempel ke
+    // toko yang didaftarkan (muncul di menu "Progres OJT" pada akun toko tsb).
+    function PsikotesScoresView({ test, stores, onBack }) {
       const [attempts, setAttempts] = useState([]);
       const [loading, setLoading] = useState(true);
+      const [links, setLinks] = useState([]);
+      const [linksLoading, setLinksLoading] = useState(true);
+      const [showRegister, setShowRegister] = useState(false);
+      const [regStoreId, setRegStoreId] = useState('');
+      const [regOjtName, setRegOjtName] = useState('');
+      const [registering, setRegistering] = useState(false);
+      const [copiedLinkId, setCopiedLinkId] = useState(null);
 
       const load = async () => {
         setLoading(true);
@@ -2283,11 +2329,55 @@ const { useState, useEffect } = React;
         if (res.ok) setAttempts(data.attempts);
         setLoading(false);
       };
-      useEffect(() => { load(); }, [test.id]);
+      const loadLinks = async () => {
+        setLinksLoading(true);
+        try {
+          const res = await __apiFetch(`${WORKER_BASE}/api/psikotes/tests/${test.id}/ojt-links`, { headers: __authHeaders() });
+          const data = await res.json();
+          if (res.ok) setLinks(data.links);
+        } finally { setLinksLoading(false); }
+      };
+      useEffect(() => { load(); loadLinks(); }, [test.id]);
 
       const handleUnblock = async (attemptId) => {
         await __apiFetch(`${WORKER_BASE}/api/psikotes/attempts/${attemptId}/unblock`, { method: 'POST', headers: __authHeaders() });
         load();
+      };
+
+      const handleRegister = async () => {
+        if (!regStoreId || !regOjtName.trim()) return;
+        setRegistering(true);
+        try {
+          const res = await __apiFetch(`${WORKER_BASE}/api/psikotes/tests/${test.id}/ojt-links`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', ...__authHeaders() },
+            body: JSON.stringify({ storeId: regStoreId, ojtName: regOjtName.trim() }),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            setRegOjtName(''); setRegStoreId(''); setShowRegister(false);
+            await loadLinks();
+            // Langsung salin link barunya ke clipboard supaya admin tinggal paste ke WA/dsb.
+            const link = `${window.location.origin}${window.location.pathname}?ojt=${data.linkToken}`;
+            navigator.clipboard.writeText(link).then(() => {
+              setCopiedLinkId(data.id);
+              setTimeout(() => setCopiedLinkId(null), 3000);
+            }).catch(() => {});
+          }
+        } finally { setRegistering(false); }
+      };
+
+      const copyLinkFor = (link) => {
+        const url = `${window.location.origin}${window.location.pathname}?ojt=${link.link_token}`;
+        navigator.clipboard.writeText(url).then(() => {
+          setCopiedLinkId(link.id);
+          setTimeout(() => setCopiedLinkId(null), 2000);
+        });
+      };
+
+      const handleDeleteLink = async (link) => {
+        if (!window.confirm(`Hapus link OJT "${link.ojt_name}" (${link.store_name})? Link ini belum dipakai.`)) return;
+        await __apiFetch(`${WORKER_BASE}/api/psikotes/ojt-links/${link.id}`, { method: 'DELETE', headers: __authHeaders() });
+        loadLinks();
       };
 
       const statusBadge = (status) => {
@@ -2297,34 +2387,100 @@ const { useState, useEffect } = React;
       };
 
       return (
-        <div className="max-w-2xl mx-auto space-y-4">
+        <div className="max-w-2xl mx-auto space-y-6">
           <div className="flex items-center gap-2">
             <button onClick={onBack} className="p-2 rounded-lg hover:bg-slate-100"><i data-lucide="arrow-left" className="w-4 h-4"></i></button>
             <h2 className="font-bold text-slate-700 text-base">Hasil — {test.title}</h2>
           </div>
-          {loading ? (
-            <div className="text-center text-slate-400 text-sm py-8"><i data-lucide="loader" className="w-6 h-6 animate-spin mx-auto"></i></div>
-          ) : attempts.length === 0 ? (
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center text-slate-500 text-sm">Belum ada OJT yang mengerjakan psikotes ini.</div>
-          ) : (
-            <div className="space-y-2">
-              {attempts.map(a => (
-                <div key={a.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center justify-between gap-3">
-                  <div>
-                    <p className="font-semibold text-slate-800 text-sm">{a.ojt_name}</p>
-                    <p className="text-xs text-slate-500">{a.penempatan}</p>
-                    {a.auto_score !== null && a.auto_score !== undefined && <p className="text-xs text-purple-700 font-bold mt-0.5">Skor: {a.auto_score}</p>}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {statusBadge(a.status)}
-                    {a.status === 'blocked' && (
-                      <button onClick={() => handleUnblock(a.id)} className="text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 rounded-lg">Buka Blokir</button>
-                    )}
-                  </div>
-                </div>
-              ))}
+
+          {/* ===== Daftarkan OJT ke Toko ===== */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-slate-700 text-sm">OJT Terdaftar (per Toko)</h3>
+              <button onClick={() => setShowRegister(v => !v)} className="flex items-center gap-1.5 bg-indigo-700 hover:bg-indigo-800 text-white text-xs font-bold px-3 py-2 rounded-xl">
+                <i data-lucide="user-plus" className="w-3.5 h-3.5"></i> Daftarkan OJT
+              </button>
             </div>
-          )}
+            <p className="text-xs text-slate-500">Pilih toko tempat OJT dilatih + nama OJT, lalu bagikan link yang dihasilkan. Skor psikotesnya otomatis muncul di akun toko yang dipilih.</p>
+
+            {showRegister && (
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-600">Toko Penempatan OJT</label>
+                  <select value={regStoreId} onChange={e => setRegStoreId(e.target.value)} className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm bg-white">
+                    <option value="">Pilih toko...</option>
+                    {(stores || []).map(s => <option key={s.id} value={s.id}>{s.name || s.id}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-600">Nama OJT</label>
+                  <input value={regOjtName} onChange={e => setRegOjtName(e.target.value)} placeholder="Nama lengkap OJT" className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm" />
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => setShowRegister(false)} className="flex-1 border border-slate-200 text-slate-600 text-sm font-semibold py-2 rounded-xl">Batal</button>
+                  <button onClick={handleRegister} disabled={registering || !regStoreId || !regOjtName.trim()} className="flex-1 bg-indigo-700 hover:bg-indigo-800 disabled:opacity-50 text-white text-sm font-bold py-2 rounded-xl">{registering ? 'Membuat...' : 'Buat Link'}</button>
+                </div>
+              </div>
+            )}
+
+            {linksLoading ? (
+              <div className="text-center text-slate-400 text-sm py-4"><i data-lucide="loader" className="w-5 h-5 animate-spin mx-auto"></i></div>
+            ) : links.length === 0 ? (
+              <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-6 text-center text-slate-400 text-xs">Belum ada OJT yang didaftarkan ke toko untuk paket ini.</div>
+            ) : (
+              <div className="space-y-2">
+                {links.map(l => (
+                  <div key={l.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-800 text-sm truncate">{l.ojt_name}</p>
+                      <p className="text-xs text-slate-500 truncate">{l.store_name}</p>
+                      {l.auto_score !== null && l.auto_score !== undefined && <p className="text-xs text-purple-700 font-bold mt-0.5">Skor: {l.auto_score}</p>}
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {l.status === 'unused' ? (
+                        <>
+                          <span className="text-[10px] bg-slate-100 text-slate-600 font-bold px-2 py-1 rounded-md">Belum Dibuka</span>
+                          <button onClick={() => copyLinkFor(l)} className="text-[11px] font-bold bg-slate-100 text-slate-700 px-2.5 py-1.5 rounded-lg">{copiedLinkId === l.id ? 'Tersalin!' : 'Salin Link'}</button>
+                          <button onClick={() => handleDeleteLink(l)} className="text-slate-400 hover:text-rose-600 p-1.5"><i data-lucide="trash-2" className="w-3.5 h-3.5"></i></button>
+                        </>
+                      ) : statusBadge(l.attempt_status)}
+                      {l.attempt_status === 'blocked' && (
+                        <button onClick={() => handleUnblock(l.attempt_id)} className="text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 rounded-lg">Buka Blokir</button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ===== Semua hasil (termasuk yang isi nama/penempatan sendiri lewat link umum) ===== */}
+          <div className="space-y-3">
+            <h3 className="font-bold text-slate-700 text-sm">Semua Hasil</h3>
+            {loading ? (
+              <div className="text-center text-slate-400 text-sm py-8"><i data-lucide="loader" className="w-6 h-6 animate-spin mx-auto"></i></div>
+            ) : attempts.length === 0 ? (
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center text-slate-500 text-sm">Belum ada OJT yang mengerjakan psikotes ini.</div>
+            ) : (
+              <div className="space-y-2">
+                {attempts.map(a => (
+                  <div key={a.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-slate-800 text-sm">{a.ojt_name}</p>
+                      <p className="text-xs text-slate-500">{a.penempatan}</p>
+                      {a.auto_score !== null && a.auto_score !== undefined && <p className="text-xs text-purple-700 font-bold mt-0.5">Skor: {a.auto_score}</p>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {statusBadge(a.status)}
+                      {a.status === 'blocked' && (
+                        <button onClick={() => handleUnblock(a.id)} className="text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 rounded-lg">Buka Blokir</button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       );
     }
@@ -4329,7 +4485,7 @@ const { useState, useEffect } = React;
             )}
 
             {tab === 'psikotes' && (
-              <AdminPsikotesTab />
+              <AdminPsikotesTab stores={stores} />
             )}
 
             {tab === 'chat' && (
@@ -4916,6 +5072,12 @@ const { useState, useEffect } = React;
       const psikotesToken = new URLSearchParams(window.location.search).get('psikotes');
       if (psikotesToken) {
         return <PsikotesOjtPublicPage linkToken={psikotesToken} />;
+      }
+      // Link per-OJT yang didaftarkan admin ke toko tertentu (?ojt=TOKEN) -- nama & toko
+      // sudah otomatis terisi dari sisi server, OJT tidak isi form manual.
+      const ojtToken = new URLSearchParams(window.location.search).get('ojt');
+      if (ojtToken) {
+        return <PsikotesOjtPublicPage linkToken={ojtToken} assigned={true} />;
       }
 
       const [session, setSession] = useState(() => loadSession());
@@ -7652,6 +7814,10 @@ Daily inventory done✅
                     <span>Chat Admin</span>
                     {unreadChat > 0 && <span className="ml-auto text-[10px] bg-rose-100 text-rose-700 font-bold px-1.5 py-0.5 rounded-md">{unreadChat}</span>}
                   </button>
+                  <button data-tour="menu-psikotes-ojt" onClick={() => { setActiveTab('psikotesOjt'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${activeTab === 'psikotesOjt' ? 'bg-purple-50 text-purple-800' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="graduation-cap" className="w-4 h-4"></i>
+                    <span>Progres OJT</span>
+                  </button>
 
                   <div className="pt-3 mt-3 border-t border-slate-100 space-y-1">
                     <button onClick={() => { setShowConfig(!showConfig); setShowMenu(false); }} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-all">
@@ -9634,8 +9800,114 @@ Daily inventory done✅
               <ChatPanel storeId={storeId} senderRole="store" senderLabel={storeName} title="Chat dengan Admin" />
             )}
 
+            {activeTab === 'psikotesOjt' && (
+              <StorePsikotesTab />
+            )}
+
           </main>
 
+        </div>
+      );
+    }
+
+    // ==========================================
+    // TOKO: Tab "Progres OJT" -- pantau skor & status psikotes OJT yang ditempatkan di toko ini
+    // ==========================================
+    function StorePsikotesTab() {
+      const [attempts, setAttempts] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [detailId, setDetailId] = useState(null); // attempt id yang riwayat jawabannya sedang dibuka
+      const [detailAnswers, setDetailAnswers] = useState(null);
+      const [detailLoading, setDetailLoading] = useState(false);
+
+      const load = async () => {
+        setLoading(true);
+        try {
+          const res = await __apiFetch(`${WORKER_BASE}/api/store/psikotes/attempts`, { headers: __authHeaders() });
+          const data = await res.json();
+          if (res.ok) setAttempts(data.attempts);
+        } finally { setLoading(false); }
+      };
+      useEffect(() => { load(); }, []);
+
+      const openDetail = async (attemptId) => {
+        if (detailId === attemptId) { setDetailId(null); setDetailAnswers(null); return; }
+        setDetailId(attemptId);
+        setDetailAnswers(null);
+        setDetailLoading(true);
+        try {
+          const res = await __apiFetch(`${WORKER_BASE}/api/store/psikotes/attempts/${attemptId}/answers`, { headers: __authHeaders() });
+          const data = await res.json();
+          if (res.ok) setDetailAnswers(data.answers);
+        } finally { setDetailLoading(false); }
+      };
+
+      const statusBadge = (status) => {
+        if (status === 'blocked') return <span className="text-[10px] bg-rose-100 text-rose-700 font-bold px-2 py-1 rounded-md">Diblokir</span>;
+        if (status === 'completed') return <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-2 py-1 rounded-md">Selesai</span>;
+        return <span className="text-[10px] bg-slate-100 text-slate-600 font-bold px-2 py-1 rounded-md">Sedang Mengerjakan</span>;
+      };
+
+      return (
+        <div className="max-w-2xl mx-auto space-y-4">
+          <div>
+            <h2 className="font-bold text-slate-700 text-base">Progres OJT</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Skor & status psikotes OJT yang ditempatkan di toko ini oleh admin.</p>
+          </div>
+
+          {loading ? (
+            <div className="text-center text-slate-400 text-sm py-8"><i data-lucide="loader" className="w-6 h-6 animate-spin mx-auto"></i></div>
+          ) : attempts.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center text-slate-500 text-sm">Belum ada OJT yang didaftarkan admin ke toko ini.</div>
+          ) : (
+            <div className="space-y-2">
+              {attempts.map(a => (
+                <div key={a.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                  <button onClick={() => openDetail(a.id)} className="w-full text-left p-4 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-800 text-sm truncate">{a.ojt_name}</p>
+                      <p className="text-xs text-slate-500 truncate">{a.test_title}</p>
+                      {a.auto_score !== null && a.auto_score !== undefined && <p className="text-xs text-purple-700 font-bold mt-0.5">Skor: {a.auto_score}{a.manual_score !== null && a.manual_score !== undefined ? ` • Manual: ${a.manual_score}` : ''}</p>}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {statusBadge(a.status)}
+                      <i data-lucide={detailId === a.id ? 'chevron-up' : 'chevron-down'} className="w-4 h-4 text-slate-400"></i>
+                    </div>
+                  </button>
+                  {detailId === a.id && (
+                    <div className="border-t border-slate-100 p-4 bg-slate-50 space-y-3">
+                      {detailLoading ? (
+                        <div className="text-center text-slate-400 text-xs py-4"><i data-lucide="loader" className="w-4 h-4 animate-spin mx-auto"></i></div>
+                      ) : !detailAnswers || detailAnswers.length === 0 ? (
+                        <p className="text-xs text-slate-400 text-center py-2">Belum ada jawaban tersimpan.</p>
+                      ) : (
+                        detailAnswers.map((ans, i) => (
+                          <div key={ans.question_id} className="bg-white rounded-xl border border-slate-200 p-3 space-y-1.5">
+                            <p className="text-xs font-semibold text-slate-700">{i + 1}. {ans.question_text}</p>
+                            {ans.question_type === 'pilihan_ganda' ? (
+                              <div className="space-y-1">
+                                {ans.options.map((opt, oi) => {
+                                  const isChosen = String(ans.answer_text) === String(oi);
+                                  const isCorrectOpt = ans.correct_index === oi;
+                                  return (
+                                    <div key={oi} className={`text-[11px] px-2 py-1 rounded-lg ${isChosen && isCorrectOpt ? 'bg-emerald-50 text-emerald-700 font-semibold' : isChosen ? 'bg-rose-50 text-rose-700 font-semibold' : isCorrectOpt ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                      {opt} {isChosen && '• dipilih'} {isCorrectOpt && '• kunci jawaban'}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <p className="text-[11px] text-slate-600 whitespace-pre-wrap bg-slate-50 rounded-lg p-2">{ans.answer_text || <span className="text-slate-400">Tidak dijawab</span>}</p>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       );
     }
