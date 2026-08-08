@@ -11,6 +11,10 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.tailwindcss.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https://unpkg.com; connect-src 'self' https://*.workers.dev https://unpkg.com https://api.telegram.org; frame-ancestors 'none'; base-uri 'self'; object-src 'none';">
   <meta http-equiv="X-Content-Type-Options" content="nosniff">
   <meta name="referrer" content="strict-origin-when-cross-origin">
+  <!-- KEAMANAN (hardening, 2026-08): cegah web ini muncul di hasil pencarian Google/Bing dkk.
+       Ini aplikasi internal toko, bukan halaman publik -- tidak perlu (dan tidak boleh)
+       ke-index search engine. Dipasangkan juga dengan file robots.txt terpisah. -->
+  <meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
 
  <!-- React core -->
   <link rel="manifest" href="manifest.json">
@@ -323,14 +327,47 @@ const { useState, useEffect } = React;
     // KONEKSI KE CLOUDFLARE WORKER (pengganti Firebase)
     // ==========================================
     const WORKER_BASE = 'https://tarobun-api.tepangbkj8.workers.dev';
-    const CF_SESSION_KEY = 'tarobun_cf_session';
 
     // ==========================================
-    // IDENTITAS DEVICE (dipakai untuk limit 2 device/toko + auto-logout tidak aktif 5 jam)
+    // SEMUA fetch() ke WORKER_BASE WAJIB lewat __apiFetch (bukan fetch() langsung) supaya
+    // credentials: 'include' selalu ikut terkirim -- ini yang membuat Cookie sesi HttpOnly
+    // (lihat catatan KEAMANAN di bawah) benar-benar terkirim & tersimpan, karena WORKER_BASE
+    // adalah origin BERBEDA dari halaman ini (subdomain workers.dev terpisah), dan browser
+    // TIDAK PERNAH mengirim/menyimpan cookie lintas-origin tanpa opsi ini secara eksplisit.
     // ==========================================
-    // deviceId acak dibuat SEKALI per browser/perangkat lalu disimpan permanen di localStorage,
-    // supaya browser yang sama tetap dikenali sebagai device yang sama walau login/logout
-    // berkali-kali (tidak dianggap device baru tiap kali login).
+    const __apiFetch = (url, opts = {}) => fetch(url, { ...opts, credentials: 'include' });
+
+    // ==========================================
+    // KEAMANAN (2026-08): sesi login TIDAK LAGI disimpan sebagai token di localStorage.
+    // Sebelumnya token autentikasi disimpan mentah-mentah di localStorage (CF_SESSION_KEY),
+    // yang artinya SEMUA script di halaman ini -- termasuk script asing yang berhasil
+    // disuntikkan lewat celah XSS mana pun -- bisa membaca token itu dan membajak sesi
+    // login. Sekarang Cloudflare Worker mengirim sesi lewat Set-Cookie HttpOnly (lihat
+    // buildSessionCookie di worker.js): cookie itu TIDAK PERNAH bisa dibaca oleh
+    // document.cookie atau JavaScript apa pun, hanya otomatis dikirim browser ke Worker.
+    // Konsekuensinya: frontend ini juga TIDAK LAGI tahu isi/nilai token-nya sendiri -- utk
+    // mengetahui "apakah user ini sedang login", frontend bertanya ke server lewat endpoint
+    // GET /api/session/me (lihat __loadCfSession di bawah), bukan membaca localStorage.
+    let __authListeners = [];
+    // __authHeaders() sengaja jadi no-op (dipertahankan sebagai fungsi kosong, bukan
+    // dihapus) supaya SEMUA titik fetch() lama di file ini yang masih menulis
+    // `...__authHeaders()` tetap berjalan tanpa perlu diubah satu-persatu -- otentikasi
+    // sekarang murni lewat Cookie (otomatis via __apiFetch), bukan header lagi.
+    const __authHeaders = () => ({});
+
+    // ==========================================
+    // IDENTITAS DEVICE -- HANYA LABEL KOSMETIK, BUKAN LAGI KONTROL KEAMANAN
+    // ==========================================
+    // PENTING (2026-08): deviceId acak di bawah ini (disimpan di localStorage) DULU dipakai
+    // Worker untuk menentukan identitas device demi pembatasan sesi -- ini rapuh, karena
+    // klien mana pun bebas membaca/mengubah/memalsukan nilai localStorage-nya sendiri untuk
+    // mengaku-aku sebagai device lain atau menghindari pembatasan. Sekarang identitas device
+    // yang MENENTUKAN HAK AKSES (`sid`) dibuat & ditandatangani di SERVER saat login (lihat
+    // /api/login/store di worker.js), lalu ikut di dalam Cookie sesi -- client tidak bisa
+    // menyentuhnya sama sekali. Variabel deviceId di bawah ini yang tersisa HANYA dipakai
+    // sebagai label kosmetik (mis. dikirim sebagai deviceLabel saat login, supaya Admin bisa
+    // melihat "Chrome - Android" dsb di menu Perangkat) -- memalsukannya tidak memberi
+    // keuntungan keamanan apa pun ke penyerang.
     const DEVICE_ID_KEY = 'tarobun_device_id';
     const getDeviceId = () => {
       try {
@@ -370,25 +407,22 @@ const { useState, useEffect } = React;
       }
     };
 
-    let __sessionToken = null;
-    let __authListeners = [];
-
-    const __saveCfSession = (token, userObj) => {
-      __sessionToken = token;
-      try { localStorage.setItem(CF_SESSION_KEY, JSON.stringify({ token, user: userObj })); } catch (e) {}
-    };
-    const __clearCfSession = () => {
-      __sessionToken = null;
-      try { localStorage.removeItem(CF_SESSION_KEY); } catch (e) {}
-    };
-    const __loadCfSession = () => {
+    // Menggantikan __loadCfSession lama (yang membaca token dari localStorage): sekarang
+    // bertanya LANGSUNG ke server lewat Cookie HttpOnly (otomatis terkirim oleh __apiFetch),
+    // karena JavaScript di sini tidak pernah bisa membaca isi cookie sesi itu sendiri.
+    // Mengembalikan null kalau tidak ada sesi valid (belum login / cookie kedaluwarsa/dihapus).
+    const __fetchServerSession = async () => {
       try {
-        const raw = JSON.parse(localStorage.getItem(CF_SESSION_KEY) || 'null');
-        if (raw && raw.token) { __sessionToken = raw.token; return raw.user; }
-      } catch (e) {}
-      return null;
+        const res = await __apiFetch(`${WORKER_BASE}/api/session/me`, { cache: 'no-store' });
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (!data || !data.ok) return null;
+        if (data.role === 'admin') return { uid: data.uid, role: 'admin' };
+        return { storeId: data.storeId, role: 'store', storeInfo: data.storeInfo };
+      } catch (e) {
+        return null;
+      }
     };
-    const __authHeaders = () => __sessionToken ? { 'Authorization': 'Bearer ' + __sessionToken } : {};
 
     const __makeSnapshot = (value) => ({
       val: () => (value === undefined ? null : value),
@@ -415,7 +449,7 @@ const { useState, useEffect } = React;
     const __fetchOrThrow = async (url, opts) => {
       let res;
       try {
-        res = await fetch(url, opts);
+        res = await __apiFetch(url, opts);
       } catch (netErr) {
         throw new Error('Tidak bisa menghubungi server (' + (netErr && netErr.message ? netErr.message : 'jaringan gagal') + ')');
       }
@@ -471,7 +505,7 @@ const { useState, useEffect } = React;
           // Sedikit lebih lama dari WAIT_TIMEOUT_MS di server (30 detik), supaya browser
           // yang membatalkan request bukan karena server-nya lambat balas.
           timeoutId = setTimeout(() => controller.abort(), 40000);
-          const res = await fetch(`${WORKER_BASE}/api/chat/wait?${qs}`, { headers: __authHeaders(), signal: controller.signal });
+          const res = await __apiFetch(`${WORKER_BASE}/api/chat/wait?${qs}`, { headers: __authHeaders(), signal: controller.signal });
           clearTimeout(timeoutId);
           const data = await res.json();
           consecutiveErrors = 0;
@@ -574,7 +608,7 @@ const { useState, useEffect } = React;
         try {
           if (!(typeof document !== 'undefined' && document.hidden) && __versionListeners.size > 0) {
             const keys = [...__versionListeners.keys()];
-            const res = await fetch(`${WORKER_BASE}/api/data-version?keys=${encodeURIComponent(keys.join(','))}`, { headers: __authHeaders() });
+            const res = await __apiFetch(`${WORKER_BASE}/api/data-version?keys=${encodeURIComponent(keys.join(','))}`, { headers: __authHeaders() });
             const data = await res.json();
             const versions = (data && data.versions) || {};
             for (const key of keys) {
@@ -769,7 +803,7 @@ const { useState, useEffect } = React;
     // `url` langsung dipakai sebagai <img src>, `key` disimpan di database untuk keperluan hapus nanti.
     const uploadMediaToR2 = async (dataUrlOrBlob, folder, ext = 'jpg') => {
       const blob = dataUrlOrBlob instanceof Blob ? dataUrlOrBlob : dataUrlToBlob(dataUrlOrBlob);
-      const res = await fetch(`${WORKER_BASE}/api/media/upload?folder=${encodeURIComponent(folder)}&ext=${encodeURIComponent(ext)}`, {
+      const res = await __apiFetch(`${WORKER_BASE}/api/media/upload?folder=${encodeURIComponent(folder)}&ext=${encodeURIComponent(ext)}`, {
         method: 'POST',
         headers: { 'Content-Type': blob.type || 'application/octet-stream', ...__authHeaders() },
         body: blob,
@@ -787,7 +821,7 @@ const { useState, useEffect } = React;
       const keys = Array.isArray(keyOrKeys) ? keyOrKeys.filter(Boolean) : [keyOrKeys].filter(Boolean);
       if (keys.length === 0) return;
       try {
-        await fetch(`${WORKER_BASE}/api/media/delete`, {
+        await __apiFetch(`${WORKER_BASE}/api/media/delete`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...__authHeaders() },
           body: JSON.stringify({ keys }),
@@ -797,55 +831,70 @@ const { useState, useEffect } = React;
       }
     };
 
-    const __makeUser = (u) => u ? { uid: u.uid || u.storeId, ...u, getIdToken: async () => __sessionToken } : null;
+    // getIdToken() dipertahankan sebagai stub kosong (bukan dihapus) untuk kompatibilitas
+    // kalau ada pemanggil lama -- tapi TIDAK PERNAH lagi mengembalikan token asli, karena
+    // token sesi sekarang hanya ada di Cookie HttpOnly yang memang sengaja tidak bisa dibaca
+    // dari JavaScript sama sekali (itulah intinya, lihat catatan KEAMANAN di atas).
+    const __makeUser = (u) => u ? { uid: u.uid || u.storeId, ...u, getIdToken: async () => null } : null;
 
     const auth = {
       currentUser: null,
       setPersistence: async () => {},
       onAuthStateChanged: (cb) => {
-        const savedUser = __loadCfSession();
-        auth.currentUser = __makeUser(savedUser);
-        Promise.resolve().then(() => cb(auth.currentUser));
+        // Async: mengecek sesi ke server (lihat __fetchServerSession) alih-alih membaca
+        // localStorage secara instan, karena kebenaran sesi sekarang murni ada di server/cookie.
+        (async () => {
+          const savedUser = await __fetchServerSession();
+          auth.currentUser = __makeUser(savedUser);
+          cb(auth.currentUser);
+        })();
         __authListeners.push(cb);
         return () => { __authListeners = __authListeners.filter(l => l !== cb); };
       },
       signInWithEmailAndPassword: async (email, password) => {
         let res, data;
         if (email === 'admin@tarobun-app.internal') {
-          res = await fetch(`${WORKER_BASE}/api/login/admin`, {
+          res = await __apiFetch(`${WORKER_BASE}/api/login/admin`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password }),
           });
           data = await res.json();
-          if (!res.ok) throw new Error(data.error || 'Login gagal');
-          __saveCfSession(data.token, { uid: data.uid, role: 'admin' });
+          if (!res.ok) { const e = new Error(data.error || 'Login gagal'); e.status = res.status; throw e; }
+          // Tidak ada lagi token untuk disimpan di sini -- Worker sudah mengirimkannya lewat
+          // Set-Cookie HttpOnly pada response ini (browser menyimpannya otomatis).
           auth.currentUser = __makeUser({ uid: data.uid, role: 'admin' });
           return { user: auth.currentUser };
         } else {
           const storeId = email.replace(/^store-/, '').replace(/@toko\.tarobun-app\.internal$/, '');
-          res = await fetch(`${WORKER_BASE}/api/login/store`, {
+          // deviceId TIDAK dikirim lagi -- server yang membuat & menandatangani identitas
+          // device (sid) sendiri saat login (lihat catatan di /api/login/store, worker.js).
+          // deviceLabel tetap dikirim, tapi murni label tampilan kosmetik untuk menu Admin.
+          res = await __apiFetch(`${WORKER_BASE}/api/login/store`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ storeId, token: password, deviceId: getDeviceId(), deviceLabel: getDeviceLabel() }),
+            body: JSON.stringify({ storeId, token: password, deviceLabel: getDeviceLabel() }),
           });
           data = await res.json();
           if (!res.ok) { const e = new Error(data.error || 'Login gagal'); e.status = res.status; throw e; }
-          __saveCfSession(data.token, { storeId: data.storeId, role: 'store' });
           auth.currentUser = __makeUser({ storeId: data.storeId, role: 'store' });
           return { user: auth.currentUser, storeInfo: data.storeInfo };
         }
       },
       createUserWithEmailAndPassword: async (email, password) => {
-        const res = await fetch(`${WORKER_BASE}/api/bootstrap-admin`, {
+        const res = await __apiFetch(`${WORKER_BASE}/api/bootstrap-admin`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, password }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Gagal membuat admin');
-        __saveCfSession(data.token, { uid: data.uid, role: 'admin' });
         auth.currentUser = __makeUser({ uid: data.uid, role: 'admin' });
         return { user: auth.currentUser };
       },
-      signOut: async () => { __clearCfSession(); auth.currentUser = null; },
+      signOut: async () => {
+        // Cookie HttpOnly tidak bisa dihapus dari JavaScript -- WAJIB minta server yang
+        // menghapusnya lewat Set-Cookie (lihat /api/logout di worker.js).
+        try { await __apiFetch(`${WORKER_BASE}/api/logout`, { method: 'POST' }); } catch (e) {}
+        auth.currentUser = null;
+      },
     };
 
     // Dipakai khusus admin membuat akun toko baru (dulu perlu "instance kedua" Firebase supaya
@@ -869,9 +918,6 @@ const { useState, useEffect } = React;
     const STORE_EMAIL_DOMAIN = '@toko.tarobun-app.internal';
     const SESSION_KEY = 'tarobun_session_v2';
     const SESSION_DURATION_MS = 24.5 * 60 * 60 * 1000; // 24 jam 30 menit sesuai permintaan
-    const LOGIN_ATTEMPT_KEY = 'tarobun_login_attempts';
-    const MAX_LOGIN_ATTEMPTS = 5;
-    const LOGIN_LOCK_MS = 60 * 1000;
 
     // ==========================================
     // KONSTANTA PRESENCE (status online/offline toko)
@@ -917,28 +963,16 @@ const { useState, useEffect } = React;
       .replace(/(^-|-$)/g, '')
       .slice(0, 40);
 
-    // Anti brute-force sederhana di sisi klien (pelindung tambahan, bukan pengganti Security Rules)
-    const getLoginAttempts = (key) => {
-      try {
-        const raw = JSON.parse(localStorage.getItem(LOGIN_ATTEMPT_KEY) || '{}');
-        return raw[key] || { count: 0, lockedUntil: 0 };
-      } catch { return { count: 0, lockedUntil: 0 }; }
-    };
-    const setLoginAttempts = (key, val) => {
-      try {
-        const raw = JSON.parse(localStorage.getItem(LOGIN_ATTEMPT_KEY) || '{}');
-        raw[key] = val;
-        localStorage.setItem(LOGIN_ATTEMPT_KEY, JSON.stringify(raw));
-      } catch {}
-    };
-    const registerFailedAttempt = (key) => {
-      const cur = getLoginAttempts(key);
-      const count = cur.count + 1;
-      const lockedUntil = count >= MAX_LOGIN_ATTEMPTS ? Date.now() + LOGIN_LOCK_MS : 0;
-      setLoginAttempts(key, { count, lockedUntil });
-      return { count, lockedUntil };
-    };
-    const clearLoginAttempts = (key) => setLoginAttempts(key, { count: 0, lockedUntil: 0 });
+    // KEAMANAN (2026-08): pembatasan percobaan login (anti brute-force) yang DULU ada di sini
+    // (disimpan & dihitung di localStorage) sudah DIHAPUS TOTAL dari frontend. LocalStorage
+    // sepenuhnya dikuasai & bisa diubah bebas oleh siapa pun yang memakai browser tsb (lewat
+    // DevTools, extension, atau script apa pun) -- artinya batasan itu SAMA SEKALI TIDAK
+    // melindungi apa pun, hanya ilusi keamanan di sisi tampilan. Pembatasan yang SUNGGUHAN
+    // sekarang 100% berjalan di Cloudflare Worker (lihat loginGuardCheck/Fail/Success di
+    // worker.js, disimpan di Durable Object -- tidak bisa disentuh/dilewati oleh client sama
+    // sekali): 5x salah dalam 15 menit per akun DAN per alamat IP akan dikunci otomatis, dan
+    // server membalas status 429 dengan pesan sisa waktu kunci -- lihat penanganannya di
+    // handleStoreLogin/handleAdminLogin di bawah (err.status === 429).
 
     const saveSession = (role, extra = {}) => {
       const session = { role, ...extra, loginAt: Date.now(), expiresAt: Date.now() + SESSION_DURATION_MS };
@@ -1409,7 +1443,7 @@ const { useState, useEffect } = React;
 
         PushNotifications.addListener('registration', async (token) => {
           try {
-            await fetch(`${WORKER_BASE}/api/push/register`, {
+            await __apiFetch(`${WORKER_BASE}/api/push/register`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', ...__authHeaders() },
               body: JSON.stringify({ fcmToken: token.value, platform: 'android' }),
@@ -1769,6 +1803,532 @@ const { useState, useEffect } = React;
       );
     }
 
+    // ==========================================
+    // HALAMAN PUBLIK: Psikotes OJT (dibuka lewat link, TANPA login)
+    // ==========================================
+    // Alur: form Nama+Penempatan -> kerjakan soal satu-satu -> selesai.
+    // Anti-keluar: kalau tab/app di-minimize atau pindah tab saat status 'taking',
+    // langsung dilaporkan ke server (flag-leave) dan attempt ditandai 'blocked'.
+    // JUJUR soal batasan: browser TIDAK memungkinkan web mencegah tab ditutup/di-refresh
+    // sepenuhnya (itu kontrol milik user, bukan website) -- yang bisa dilakukan hanya
+    // MENDETEKSI ketika itu terjadi lalu mengunci attempt-nya sampai admin buka blokir,
+    // bukan benar-benar mencegah user pindah tab secara fisik.
+    function PsikotesOjtPublicPage({ linkToken }) {
+      const storageKey = `tarobun_psikotes_attempt_${linkToken}`;
+      const [phase, setPhase] = useState('loading'); // loading | form | taking | blocked | done | error
+      const [errorMsg, setErrorMsg] = useState('');
+      const [test, setTest] = useState(null);
+      const [name, setName] = useState('');
+      const [penempatan, setPenempatan] = useState('');
+      const [submittingStart, setSubmittingStart] = useState(false);
+      const [attempt, setAttempt] = useState(null); // { attemptId, attemptSecret }
+      const [questions, setQuestions] = useState([]);
+      const [qIndex, setQIndex] = useState(0);
+      const [answers, setAnswers] = useState({}); // { [questionId]: value }
+      const [saving, setSaving] = useState(false);
+      const [autoScore, setAutoScore] = useState(null);
+
+      // Muat info paket psikotes (judul/deskripsi/terkunci) begitu halaman dibuka.
+      useEffect(() => {
+        (async () => {
+          try {
+            const res = await fetch(`${WORKER_BASE}/api/psikotes/public/${linkToken}`);
+            const data = await res.json();
+            if (!res.ok) { setErrorMsg(data.error || 'Link tidak valid'); setPhase('error'); return; }
+            setTest(data.test);
+            // Kalau OJT sebelumnya sempat memulai (refresh halaman tanpa sengaja), lanjutkan
+            // dari attempt yang sama, bukan mulai dari nol -- ambil dari localStorage.
+            const saved = localStorage.getItem(storageKey);
+            if (saved) {
+              try {
+                const parsed = JSON.parse(saved);
+                const statusRes = await fetch(`${WORKER_BASE}/api/psikotes/public/attempt/${parsed.attemptId}/status?attemptSecret=${encodeURIComponent(parsed.attemptSecret)}`);
+                const statusData = await statusRes.json();
+                if (statusRes.ok) {
+                  if (statusData.status === 'blocked') { setAttempt(parsed); setPhase('blocked'); return; }
+                  if (statusData.status === 'completed') { setPhase('done'); return; }
+                }
+              } catch (e) { /* kalau gagal cek, biarkan lanjut ke form biasa */ }
+            }
+            setPhase(data.test.locked ? 'locked' : 'form');
+          } catch (e) {
+            setErrorMsg('Gagal memuat halaman psikotes. Periksa koneksi internet.');
+            setPhase('error');
+          }
+        })();
+      }, [linkToken]);
+
+      const handleStart = async () => {
+        if (!name.trim() || !penempatan.trim()) return;
+        setSubmittingStart(true);
+        try {
+          const res = await fetch(`${WORKER_BASE}/api/psikotes/public/${linkToken}/start`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name.trim(), penempatan: penempatan.trim() }),
+          });
+          const data = await res.json();
+          if (!res.ok) { setErrorMsg(data.error || 'Gagal memulai psikotes'); setSubmittingStart(false); return; }
+          const attemptInfo = { attemptId: data.attemptId, attemptSecret: data.attemptSecret };
+          localStorage.setItem(storageKey, JSON.stringify(attemptInfo));
+          setAttempt(attemptInfo);
+          setQuestions(data.questions);
+          setPhase('taking');
+        } catch (e) {
+          setErrorMsg('Gagal memulai psikotes. Periksa koneksi internet.');
+        } finally {
+          setSubmittingStart(false);
+        }
+      };
+
+      // Deteksi OJT pindah tab / minimize app selama mengerjakan (fase 'taking').
+      useEffect(() => {
+        if (phase !== 'taking' || !attempt) return;
+        const reportLeave = () => {
+          navigator.sendBeacon
+            ? navigator.sendBeacon(`${WORKER_BASE}/api/psikotes/public/attempt/${attempt.attemptId}/flag-leave`, new Blob([JSON.stringify({ attemptSecret: attempt.attemptSecret })], { type: 'application/json' }))
+            : fetch(`${WORKER_BASE}/api/psikotes/public/attempt/${attempt.attemptId}/flag-leave`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ attemptSecret: attempt.attemptSecret }), keepalive: true }).catch(() => {});
+          setPhase('blocked');
+        };
+        const onVisibility = () => { if (document.hidden) reportLeave(); };
+        document.addEventListener('visibilitychange', onVisibility);
+        window.addEventListener('pagehide', reportLeave);
+        return () => {
+          document.removeEventListener('visibilitychange', onVisibility);
+          window.removeEventListener('pagehide', reportLeave);
+        };
+      }, [phase, attempt]);
+
+      // Selagi terblokir, cek berkala apakah admin sudah membuka blokirnya.
+      useEffect(() => {
+        if (phase !== 'blocked' || !attempt) return;
+        const interval = setInterval(async () => {
+          try {
+            const res = await fetch(`${WORKER_BASE}/api/psikotes/public/attempt/${attempt.attemptId}/status?attemptSecret=${encodeURIComponent(attempt.attemptSecret)}`);
+            const data = await res.json();
+            if (res.ok && data.status === 'in_progress') setPhase('taking');
+          } catch (e) { /* diamkan, coba lagi di interval berikutnya */ }
+        }, 5000);
+        return () => clearInterval(interval);
+      }, [phase, attempt]);
+
+      const saveAnswer = async (questionId, value) => {
+        setAnswers(prev => ({ ...prev, [questionId]: value }));
+        try {
+          await fetch(`${WORKER_BASE}/api/psikotes/public/attempt/${attempt.attemptId}/answer`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ attemptSecret: attempt.attemptSecret, questionId, answer: value }),
+          });
+        } catch (e) { /* best-effort; kalau gagal, jawaban lokal tetap kelihatan tersimpan di UI */ }
+      };
+
+      const handleFinish = async () => {
+        setSaving(true);
+        try {
+          const res = await fetch(`${WORKER_BASE}/api/psikotes/public/attempt/${attempt.attemptId}/finish`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ attemptSecret: attempt.attemptSecret }),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            setAutoScore(data.autoScore);
+            localStorage.removeItem(storageKey);
+            setPhase('done');
+          } else {
+            setErrorMsg(data.error || 'Gagal mengumpulkan jawaban');
+          }
+        } catch (e) {
+          setErrorMsg('Gagal mengumpulkan jawaban. Periksa koneksi internet lalu coba lagi.');
+        } finally {
+          setSaving(false);
+        }
+      };
+
+      const Shell = ({ children }) => (
+        <div className="min-h-screen bg-gradient-to-br from-purple-50 via-white to-indigo-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-md">{children}</div>
+        </div>
+      );
+
+      if (phase === 'loading') {
+        return <Shell><div className="text-center text-slate-500"><i data-lucide="loader" className="w-8 h-8 animate-spin mx-auto mb-2"></i>Memuat...</div></Shell>;
+      }
+      if (phase === 'error') {
+        return <Shell><div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 text-center space-y-2">
+          <i data-lucide="alert-triangle" className="w-10 h-10 text-rose-500 mx-auto"></i>
+          <h2 className="font-bold text-slate-800">Tidak Bisa Membuka Psikotes</h2>
+          <p className="text-sm text-slate-500">{errorMsg}</p>
+        </div></Shell>;
+      }
+      if (phase === 'locked') {
+        return <Shell><div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 text-center space-y-2">
+          <i data-lucide="lock" className="w-10 h-10 text-amber-500 mx-auto"></i>
+          <h2 className="font-bold text-slate-800">Psikotes Dikunci</h2>
+          <p className="text-sm text-slate-500">Psikotes ini sedang dikunci oleh admin. Hubungi admin/toko untuk info lebih lanjut.</p>
+        </div></Shell>;
+      }
+      if (phase === 'blocked') {
+        return <Shell><div className="bg-white rounded-2xl border border-rose-200 shadow-sm p-6 text-center space-y-2">
+          <i data-lucide="shield-alert" className="w-10 h-10 text-rose-500 mx-auto"></i>
+          <h2 className="font-bold text-slate-800">Akses Diblokir</h2>
+          <p className="text-sm text-slate-500">Kamu terdeteksi keluar dari halaman psikotes saat sedang mengerjakan. Hubungi admin/toko untuk membuka blokir. Halaman ini akan otomatis lanjut begitu diizinkan.</p>
+        </div></Shell>;
+      }
+      if (phase === 'done') {
+        return <Shell><div className="bg-white rounded-2xl border border-emerald-200 shadow-sm p-6 text-center space-y-2">
+          <i data-lucide="check-circle-2" className="w-10 h-10 text-emerald-500 mx-auto"></i>
+          <h2 className="font-bold text-slate-800">Psikotes Selesai</h2>
+          <p className="text-sm text-slate-500">Terima kasih, jawabanmu sudah tersimpan. Hasilnya akan direview oleh admin/toko.</p>
+        </div></Shell>;
+      }
+      if (phase === 'form') {
+        return <Shell><div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+          <div className="text-center space-y-1">
+            <i data-lucide="clipboard-list" className="w-9 h-9 text-purple-700 mx-auto"></i>
+            <h2 className="font-bold text-slate-800 text-lg">{test?.title}</h2>
+            {test?.description && <p className="text-xs text-slate-500">{test.description}</p>}
+          </div>
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
+            Setelah mulai, jangan pindah tab/aplikasi lain sampai selesai — kalau keluar, akses akan otomatis diblokir dan butuh izin admin untuk dibuka lagi.
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-600">Nama Lengkap</label>
+            <input value={name} onChange={e => setName(e.target.value)} className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm" placeholder="Nama kamu" />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-600">Lokasi Penempatan</label>
+            <input value={penempatan} onChange={e => setPenempatan(e.target.value)} className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm" placeholder="Contoh: Toko Cabang A" />
+          </div>
+          {errorMsg && <p className="text-xs text-rose-600">{errorMsg}</p>}
+          <button onClick={handleStart} disabled={submittingStart || !name.trim() || !penempatan.trim()} className="w-full bg-purple-800 hover:bg-purple-900 disabled:opacity-50 text-white font-bold py-3 rounded-xl text-sm">
+            {submittingStart ? 'Memulai...' : 'Mulai Psikotes'}
+          </button>
+        </div></Shell>;
+      }
+
+      // phase === 'taking'
+      const q = questions[qIndex];
+      const allAnswered = questions.every(qq => answers[qq.id] !== undefined && answers[qq.id] !== '');
+      return (
+        <div className="min-h-screen bg-slate-50 p-4">
+          <div className="max-w-md mx-auto space-y-4">
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 sticky top-4 z-10">
+              <div className="flex items-center justify-between text-xs text-slate-500 mb-2">
+                <span>Soal {qIndex + 1} dari {questions.length}</span>
+                <span>{Object.keys(answers).length}/{questions.length} terjawab</span>
+              </div>
+              <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                <div className="h-full bg-purple-700 rounded-full transition-all" style={{ width: `${((qIndex + 1) / questions.length) * 100}%` }}></div>
+              </div>
+            </div>
+
+            {q && (
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+                <p className="font-semibold text-slate-800 text-sm whitespace-pre-wrap">{q.text}</p>
+                {q.type === 'pilihan_ganda' ? (
+                  <div className="space-y-2">
+                    {q.options.map((opt, i) => (
+                      <button key={i} onClick={() => saveAnswer(q.id, String(i))}
+                        className={`w-full text-left px-3 py-2.5 rounded-xl text-sm border transition-all ${String(answers[q.id]) === String(i) ? 'bg-purple-800 text-white border-purple-800' : 'border-slate-200 text-slate-700 hover:bg-slate-50'}`}>
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <textarea value={answers[q.id] || ''} onChange={e => saveAnswer(q.id, e.target.value)} rows={4}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm" placeholder="Tulis jawabanmu di sini..." />
+                )}
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <button onClick={() => setQIndex(i => Math.max(0, i - 1))} disabled={qIndex === 0}
+                className="flex-1 bg-white border border-slate-200 disabled:opacity-40 text-slate-700 font-semibold py-2.5 rounded-xl text-sm">Sebelumnya</button>
+              {qIndex < questions.length - 1 ? (
+                <button onClick={() => setQIndex(i => Math.min(questions.length - 1, i + 1))}
+                  className="flex-1 bg-purple-800 hover:bg-purple-900 text-white font-semibold py-2.5 rounded-xl text-sm">Selanjutnya</button>
+              ) : (
+                <button onClick={handleFinish} disabled={saving || !allAnswered}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl text-sm">
+                  {saving ? 'Mengirim...' : 'Kumpulkan Jawaban'}
+                </button>
+              )}
+            </div>
+            {!allAnswered && qIndex === questions.length - 1 && (
+              <p className="text-xs text-center text-slate-400">Jawab semua soal dulu sebelum mengumpulkan.</p>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ==========================================
+    // ADMIN: Tab "Psikotes OJT" -- kelola paket psikotes, soal, dan hasil OJT
+    // ==========================================
+    function AdminPsikotesTab() {
+      const [tests, setTests] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [showCreate, setShowCreate] = useState(false);
+      const [newTitle, setNewTitle] = useState('');
+      const [newDesc, setNewDesc] = useState('');
+      const [creating, setCreating] = useState(false);
+      const [linkCopied, setLinkCopied] = useState(null);
+      const [editingTest, setEditingTest] = useState(null); // { id, title } -- buka editor soal
+      const [viewingScores, setViewingScores] = useState(null); // { id, title } -- buka daftar hasil
+
+      const loadTests = async () => {
+        setLoading(true);
+        try {
+          const res = await __apiFetch(`${WORKER_BASE}/api/psikotes/tests`, { headers: __authHeaders() });
+          const data = await res.json();
+          if (res.ok) setTests(data.tests);
+        } finally { setLoading(false); }
+      };
+      useEffect(() => { loadTests(); }, []);
+
+      const handleCreate = async () => {
+        if (!newTitle.trim()) return;
+        setCreating(true);
+        try {
+          const res = await __apiFetch(`${WORKER_BASE}/api/psikotes/tests`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', ...__authHeaders() },
+            body: JSON.stringify({ title: newTitle.trim(), description: newDesc.trim() }),
+          });
+          if (res.ok) {
+            setNewTitle(''); setNewDesc(''); setShowCreate(false);
+            await loadTests();
+          }
+        } finally { setCreating(false); }
+      };
+
+      const toggleLock = async (test) => {
+        await __apiFetch(`${WORKER_BASE}/api/psikotes/tests/${test.id}/lock`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...__authHeaders() },
+          body: JSON.stringify({ locked: !test.locked }),
+        });
+        loadTests();
+      };
+
+      const handleDelete = async (test) => {
+        if (!window.confirm(`Hapus paket psikotes "${test.title}"? Semua soal & hasil OJT ikut terhapus.`)) return;
+        await __apiFetch(`${WORKER_BASE}/api/psikotes/tests/${test.id}`, { method: 'DELETE', headers: __authHeaders() });
+        loadTests();
+      };
+
+      const copyLink = (test) => {
+        const link = `${window.location.origin}${window.location.pathname}?psikotes=${test.link_token}`;
+        navigator.clipboard.writeText(link).then(() => {
+          setLinkCopied(test.id);
+          setTimeout(() => setLinkCopied(null), 2000);
+        });
+      };
+
+      if (editingTest) {
+        return <PsikotesQuestionEditor test={editingTest} onBack={() => { setEditingTest(null); loadTests(); }} />;
+      }
+      if (viewingScores) {
+        return <PsikotesScoresView test={viewingScores} onBack={() => setViewingScores(null)} />;
+      }
+
+      return (
+        <div className="max-w-2xl mx-auto space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="font-bold text-slate-700 text-base">Psikotes OJT</h2>
+            <button onClick={() => setShowCreate(true)} className="flex items-center gap-1.5 bg-purple-800 hover:bg-purple-900 text-white text-xs font-bold px-3 py-2 rounded-xl">
+              <i data-lucide="plus" className="w-3.5 h-3.5"></i> Buat Psikotes
+            </button>
+          </div>
+          <p className="text-xs text-slate-500">Buat paket soal evaluasi untuk anak OJT, bagikan link-nya, lalu pantau hasilnya di sini. OJT yang keluar dari halaman saat mengerjakan otomatis terblokir sampai kamu buka blokirnya.</p>
+
+          {showCreate && (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
+              <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="Judul, mis. SOP Produksi Roti Taro" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm" />
+              <textarea value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="Deskripsi singkat (opsional)" rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm" />
+              <div className="flex gap-2">
+                <button onClick={() => setShowCreate(false)} className="flex-1 border border-slate-200 text-slate-600 text-sm font-semibold py-2 rounded-xl">Batal</button>
+                <button onClick={handleCreate} disabled={creating || !newTitle.trim()} className="flex-1 bg-purple-800 hover:bg-purple-900 disabled:opacity-50 text-white text-sm font-bold py-2 rounded-xl">{creating ? 'Menyimpan...' : 'Simpan'}</button>
+              </div>
+            </div>
+          )}
+
+          {loading ? (
+            <div className="text-center text-slate-400 text-sm py-8"><i data-lucide="loader" className="w-6 h-6 animate-spin mx-auto"></i></div>
+          ) : tests.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center text-slate-500 text-sm">Belum ada paket psikotes. Klik "Buat Psikotes" untuk mulai.</div>
+          ) : (
+            <div className="space-y-3">
+              {tests.map(test => (
+                <div key={test.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h3 className="font-bold text-slate-800 text-sm">{test.title}</h3>
+                      {test.description && <p className="text-xs text-slate-500 mt-0.5">{test.description}</p>}
+                      <div className="flex items-center gap-2 mt-1.5 text-[11px] text-slate-400">
+                        <span>{test.question_count} soal</span>
+                        <span>•</span>
+                        <span>{test.attempt_count} OJT sudah isi</span>
+                        {test.blocked_count > 0 && <span className="text-rose-600 font-semibold">• {test.blocked_count} diblokir</span>}
+                      </div>
+                    </div>
+                    {test.locked ? (
+                      <span className="text-[10px] bg-amber-100 text-amber-700 font-bold px-2 py-1 rounded-md flex items-center gap-1"><i data-lucide="lock" className="w-3 h-3"></i>Terkunci</span>
+                    ) : (
+                      <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-2 py-1 rounded-md">Aktif</span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={() => setEditingTest({ id: test.id, title: test.title })} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700">Kelola Soal</button>
+                    <button onClick={() => setViewingScores({ id: test.id, title: test.title })} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700">Lihat Hasil</button>
+                    <button onClick={() => copyLink(test)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700">{linkCopied === test.id ? 'Tersalin!' : 'Salin Link'}</button>
+                    <button onClick={() => toggleLock(test)} className={`text-xs font-semibold px-3 py-1.5 rounded-lg ${test.locked ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{test.locked ? 'Buka Kunci' : 'Kunci'}</button>
+                    <button onClick={() => handleDelete(test)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-rose-50 text-rose-600 ml-auto">Hapus</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // Editor soal untuk satu paket psikotes (tipe pilihan_ganda / esai).
+    function PsikotesQuestionEditor({ test, onBack }) {
+      const [questions, setQuestions] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [saving, setSaving] = useState(false);
+
+      useEffect(() => {
+        (async () => {
+          const res = await __apiFetch(`${WORKER_BASE}/api/psikotes/tests/${test.id}/questions`, { headers: __authHeaders() });
+          const data = await res.json();
+          if (res.ok) setQuestions(data.questions.length ? data.questions.map(q => ({ type: q.question_type, text: q.question_text, options: q.options.length ? q.options : ['', ''], correctIndex: q.correct_index })) : []);
+          setLoading(false);
+        })();
+      }, [test.id]);
+
+      const addQuestion = (type) => {
+        setQuestions(prev => [...prev, type === 'esai' ? { type: 'esai', text: '' } : { type: 'pilihan_ganda', text: '', options: ['', ''], correctIndex: 0 }]);
+      };
+      const updateQuestion = (i, patch) => setQuestions(prev => prev.map((q, idx) => idx === i ? { ...q, ...patch } : q));
+      const removeQuestion = (i) => setQuestions(prev => prev.filter((_, idx) => idx !== i));
+      const updateOption = (qi, oi, value) => setQuestions(prev => prev.map((q, idx) => idx === qi ? { ...q, options: q.options.map((o, j) => j === oi ? value : o) } : q));
+      const addOption = (qi) => setQuestions(prev => prev.map((q, idx) => idx === qi ? { ...q, options: [...q.options, ''] } : q));
+      const removeOption = (qi, oi) => setQuestions(prev => prev.map((q, idx) => idx === qi ? { ...q, options: q.options.filter((_, j) => j !== oi), correctIndex: q.correctIndex >= q.options.length - 1 ? 0 : q.correctIndex } : q));
+
+      const handleSave = async () => {
+        setSaving(true);
+        try {
+          const res = await __apiFetch(`${WORKER_BASE}/api/psikotes/tests/${test.id}/questions`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json', ...__authHeaders() },
+            body: JSON.stringify({ questions }),
+          });
+          if (res.ok) onBack();
+        } finally { setSaving(false); }
+      };
+
+      if (loading) return <div className="text-center text-slate-400 text-sm py-8"><i data-lucide="loader" className="w-6 h-6 animate-spin mx-auto"></i></div>;
+
+      return (
+        <div className="max-w-2xl mx-auto space-y-4">
+          <div className="flex items-center gap-2">
+            <button onClick={onBack} className="p-2 rounded-lg hover:bg-slate-100"><i data-lucide="arrow-left" className="w-4 h-4"></i></button>
+            <h2 className="font-bold text-slate-700 text-base">Kelola Soal — {test.title}</h2>
+          </div>
+
+          <div className="space-y-3">
+            {questions.map((q, qi) => (
+              <div key={qi} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-400">Soal {qi + 1} • {q.type === 'esai' ? 'Esai' : 'Pilihan Ganda'}</span>
+                  <button onClick={() => removeQuestion(qi)} className="text-rose-500 text-xs font-semibold">Hapus</button>
+                </div>
+                <textarea value={q.text} onChange={e => updateQuestion(qi, { text: e.target.value })} rows={2} placeholder="Tulis pertanyaan..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                {q.type === 'pilihan_ganda' && (
+                  <div className="space-y-1.5">
+                    {q.options.map((opt, oi) => (
+                      <div key={oi} className="flex items-center gap-2">
+                        <input type="radio" checked={q.correctIndex === oi} onChange={() => updateQuestion(qi, { correctIndex: oi })} title="Tandai sebagai jawaban benar" />
+                        <input value={opt} onChange={e => updateOption(qi, oi, e.target.value)} placeholder={`Pilihan ${oi + 1}`} className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs" />
+                        {q.options.length > 2 && <button onClick={() => removeOption(qi, oi)} className="text-slate-400"><i data-lucide="x" className="w-3.5 h-3.5"></i></button>}
+                      </div>
+                    ))}
+                    <button onClick={() => addOption(qi)} className="text-[11px] font-semibold text-purple-700">+ Tambah pilihan</button>
+                    <p className="text-[10px] text-slate-400">Klik bulatan di samping pilihan untuk menandai jawaban yang benar.</p>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="flex gap-2">
+            <button onClick={() => addQuestion('pilihan_ganda')} className="flex-1 border border-dashed border-slate-300 text-slate-600 text-xs font-semibold py-2.5 rounded-xl">+ Soal Pilihan Ganda</button>
+            <button onClick={() => addQuestion('esai')} className="flex-1 border border-dashed border-slate-300 text-slate-600 text-xs font-semibold py-2.5 rounded-xl">+ Soal Esai</button>
+          </div>
+
+          <button onClick={handleSave} disabled={saving} className="w-full bg-purple-800 hover:bg-purple-900 disabled:opacity-50 text-white font-bold py-3 rounded-xl text-sm">
+            {saving ? 'Menyimpan...' : 'Simpan Semua Soal'}
+          </button>
+        </div>
+      );
+    }
+
+    // Daftar hasil/skor OJT untuk satu paket psikotes, dengan tombol buka blokir.
+    function PsikotesScoresView({ test, onBack }) {
+      const [attempts, setAttempts] = useState([]);
+      const [loading, setLoading] = useState(true);
+
+      const load = async () => {
+        setLoading(true);
+        const res = await __apiFetch(`${WORKER_BASE}/api/psikotes/tests/${test.id}/attempts`, { headers: __authHeaders() });
+        const data = await res.json();
+        if (res.ok) setAttempts(data.attempts);
+        setLoading(false);
+      };
+      useEffect(() => { load(); }, [test.id]);
+
+      const handleUnblock = async (attemptId) => {
+        await __apiFetch(`${WORKER_BASE}/api/psikotes/attempts/${attemptId}/unblock`, { method: 'POST', headers: __authHeaders() });
+        load();
+      };
+
+      const statusBadge = (status) => {
+        if (status === 'blocked') return <span className="text-[10px] bg-rose-100 text-rose-700 font-bold px-2 py-1 rounded-md">Diblokir</span>;
+        if (status === 'completed') return <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-2 py-1 rounded-md">Selesai</span>;
+        return <span className="text-[10px] bg-slate-100 text-slate-600 font-bold px-2 py-1 rounded-md">Mengerjakan</span>;
+      };
+
+      return (
+        <div className="max-w-2xl mx-auto space-y-4">
+          <div className="flex items-center gap-2">
+            <button onClick={onBack} className="p-2 rounded-lg hover:bg-slate-100"><i data-lucide="arrow-left" className="w-4 h-4"></i></button>
+            <h2 className="font-bold text-slate-700 text-base">Hasil — {test.title}</h2>
+          </div>
+          {loading ? (
+            <div className="text-center text-slate-400 text-sm py-8"><i data-lucide="loader" className="w-6 h-6 animate-spin mx-auto"></i></div>
+          ) : attempts.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center text-slate-500 text-sm">Belum ada OJT yang mengerjakan psikotes ini.</div>
+          ) : (
+            <div className="space-y-2">
+              {attempts.map(a => (
+                <div key={a.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="font-semibold text-slate-800 text-sm">{a.ojt_name}</p>
+                    <p className="text-xs text-slate-500">{a.penempatan}</p>
+                    {a.auto_score !== null && a.auto_score !== undefined && <p className="text-xs text-purple-700 font-bold mt-0.5">Skor: {a.auto_score}</p>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {statusBadge(a.status)}
+                    {a.status === 'blocked' && (
+                      <button onClick={() => handleUnblock(a.id)} className="text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 rounded-lg">Buka Blokir</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function LoginScreen({ onLoggedIn }) {
       const [mode, setMode] = useState('store'); // 'store' | 'admin'
       const [adminExists, setAdminExists] = useState(null); // null = belum dicek
@@ -1898,7 +2458,7 @@ const { useState, useEffect } = React;
         };
 
         const tryAdminCheck = (n) => {
-          fetch(`${WORKER_BASE}/api/admin-exists`)
+          __apiFetch(`${WORKER_BASE}/api/admin-exists`)
             .then(res => { if (!res.ok) throw new Error('admin-exists gagal'); return res.json(); })
             .then(data => {
               if (cancelled) return;
@@ -1957,23 +2517,14 @@ const { useState, useEffect } = React;
         };
       }, []);
 
-      const attemptKeyFor = (id) => `login_${mode}_${id}`;
-
       const handleStoreLogin = async (e) => {
         e.preventDefault();
         setError('');
         if (!storeId || !token) { setError('Pilih toko & isi token.'); return; }
-        const key = attemptKeyFor(storeId);
-        const attempt = getLoginAttempts(key);
-        if (attempt.lockedUntil > Date.now()) {
-          setError(`Terlalu banyak percobaan gagal. Coba lagi dalam ${Math.ceil((attempt.lockedUntil - Date.now()) / 1000)} detik.`);
-          return;
-        }
         setLoading(true);
         try {
           const email = storeIdToEmail(storeId);
           const cred = await auth.signInWithEmailAndPassword(email, token);
-          clearLoginAttempts(key);
           const info = cred.storeInfo;
           if (!info || info.active === false) {
             await auth.signOut();
@@ -1984,16 +2535,14 @@ const { useState, useEffect } = React;
           saveSession('store', { storeId, storeName: info.name });
           onLoggedIn({ role: 'store', storeId, storeName: info.name });
         } catch (err) {
-          // BUGFIX (2026-07-30): dulu SELALU menampilkan "Nama toko atau token salah" apa pun
-          // penyebabnya, termasuk saat sebenarnya PENYEBABNYA adalah limit 2 device (pesan asli
-          // dari server soal itu jadi tidak pernah terlihat user). Sekarang: kalau ini kasus
-          // limit device (status 409), tampilkan pesan ASLI dari server & JANGAN hitung sebagai
-          // percobaan gagal (registerFailedAttempt) — user tidak salah ketik apa pun, jadi tidak
-          // adil kalau ini ikut mengunci akunnya karena "5x salah dalam 15 menit".
-          if (err && err.status === 409) {
-            setError(err.message || 'Sudah ada 2 perangkat lain yang sedang aktif memakai akun toko ini.');
+          // Anti brute-force sepenuhnya ditangani server (lihat catatan KEAMANAN di atas):
+          // kalau terlalu banyak percobaan gagal, server membalas status 429 dengan pesan
+          // sisa waktu kunci -- tampilkan APA ADANYA, jangan diseragamkan.
+          if (err && err.status === 429) {
+            setError(err.message || 'Terlalu banyak percobaan login gagal. Coba lagi beberapa saat lagi.');
+          } else if (err && err.status === 409) {
+            setError(err.message || 'Sudah ada perangkat lain yang sedang aktif memakai akun toko ini.');
           } else {
-            registerFailedAttempt(key);
             setError('Nama toko atau token salah.');
           }
         } finally {
@@ -2004,12 +2553,6 @@ const { useState, useEffect } = React;
       const handleAdminLogin = async (e) => {
         e.preventDefault();
         setError('');
-        const key = attemptKeyFor('admin');
-        const attempt = getLoginAttempts(key);
-        if (attempt.lockedUntil > Date.now()) {
-          setError(`Terlalu banyak percobaan gagal. Coba lagi dalam ${Math.ceil((attempt.lockedUntil - Date.now()) / 1000)} detik.`);
-          return;
-        }
         setLoading(true);
         try {
           if (adminExists === false) {
@@ -2024,12 +2567,13 @@ const { useState, useEffect } = React;
             return;
           }
           await auth.signInWithEmailAndPassword(ADMIN_EMAIL, adminPassword);
-          clearLoginAttempts(key);
           saveSession('admin', {});
           onLoggedIn({ role: 'admin' });
         } catch (err) {
-          registerFailedAttempt(key);
-          if (adminExists === false && /sudah/i.test(err.message || '')) {
+          // Anti brute-force sepenuhnya ditangani server -- lihat catatan KEAMANAN di atas.
+          if (err && err.status === 429) {
+            setError(err.message || 'Terlalu banyak percobaan login gagal. Coba lagi beberapa saat lagi.');
+          } else if (adminExists === false && /sudah/i.test(err.message || '')) {
             // Server bilang admin sebenarnya sudah ada (flag di sisi ini sempat tidak sinkron,
             // dan sudah otomatis dibetulkan oleh server barusan) — langsung alihkan ke form Login
             // supaya pengguna tidak bingung dan tidak coba "buat akun" berulang-ulang.
@@ -2660,7 +3204,7 @@ const { useState, useEffect } = React;
           if (stopped) return;
           if (!document.hidden) {
             try {
-              const res = await fetch(`${WORKER_BASE}/api/stores-summary`, { headers: __authHeaders() });
+              const res = await __apiFetch(`${WORKER_BASE}/api/stores-summary`, { headers: __authHeaders() });
               const data = await res.json();
               const map = data.stores || {};
               const list = Object.keys(map).map(id => ({ id, ...map[id] })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -2687,7 +3231,7 @@ const { useState, useEffect } = React;
           if (stopped) return;
           if (!document.hidden) {
             try {
-              const res = await fetch(`${WORKER_BASE}/api/presence/status`, { headers: __authHeaders() });
+              const res = await __apiFetch(`${WORKER_BASE}/api/presence/status`, { headers: __authHeaders() });
               const data = await res.json();
               if (!stopped) setStoresPresence(data || {});
             } catch (e) { /* diam-diam, coba lagi di poll berikutnya */ }
@@ -2729,7 +3273,7 @@ const { useState, useEffect } = React;
       const loadDevices = async () => {
         setLoadingDevices(true);
         try {
-          const res = await fetch(`${WORKER_BASE}/api/admin/devices`, { headers: __authHeaders() });
+          const res = await __apiFetch(`${WORKER_BASE}/api/admin/devices`, { headers: __authHeaders() });
           const data = await res.json();
           setDevicesData(data || {});
         } catch (e) {
@@ -2757,7 +3301,7 @@ const { useState, useEffect } = React;
         const key = `${storeId}::${deviceId}`;
         setKickingDevice(key);
         try {
-          await fetch(`${WORKER_BASE}/api/admin/devices/kick`, {
+          await __apiFetch(`${WORKER_BASE}/api/admin/devices/kick`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...__authHeaders() },
             body: JSON.stringify({ storeId, deviceId }),
@@ -2895,7 +3439,7 @@ const { useState, useEffect } = React;
         const refreshSummary = async () => {
           if (stopped) return;
           try {
-            const res = await fetch(`${WORKER_BASE}/api/chat/summary`, { headers: __authHeaders() });
+            const res = await __apiFetch(`${WORKER_BASE}/api/chat/summary`, { headers: __authHeaders() });
             const data = await res.json();
             const summaryMap = data.summary || {};
             const counts = {};
@@ -3108,7 +3652,7 @@ const { useState, useEffect } = React;
           // Kirim notifikasi otomatis ke toko lewat Chat, sebagai pemberitahuan laporan 7 hari lalu
           // telah dibersihkan oleh Admin.
           const notifText = `🧹 ${oldEntries.length} laporan penjualan & stok yang usianya sudah 7 hari atau lebih telah dibersihkan oleh Admin dari sistem, untuk menjaga performa aplikasi.`;
-          await fetch(`${WORKER_BASE}/api/chat`, {
+          await __apiFetch(`${WORKER_BASE}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...__authHeaders() },
             body: JSON.stringify({ storeId: detailStore.id, senderLabel: 'Sistem (Otomatis)', text: notifText }),
@@ -3393,6 +3937,10 @@ const { useState, useEffect } = React;
                     <i data-lucide="book-open" className="w-4 h-4"></i>
                     <span>Panduan SOP</span>
                     <span className="ml-auto text-[10px] bg-indigo-100 text-indigo-700 font-bold px-1.5 py-0.5 rounded-md">{sopCategories.length}</span>
+                  </button>
+                  <button onClick={() => { setTab('psikotes'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${tab === 'psikotes' ? 'bg-indigo-50 text-indigo-900' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    <i data-lucide="graduation-cap" className="w-4 h-4"></i>
+                    <span>Psikotes OJT</span>
                   </button>
                   <button data-tour="menu-chat" onClick={() => { setTab('chat'); setShowMenu(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${tab === 'chat' ? 'bg-indigo-50 text-indigo-900' : 'text-slate-600 hover:bg-slate-50'}`}>
                     <i data-lucide="message-circle" className="w-4 h-4"></i>
@@ -3778,6 +4326,10 @@ const { useState, useEffect } = React;
                   ))}
                 </div>
               </div>
+            )}
+
+            {tab === 'psikotes' && (
+              <AdminPsikotesTab />
             )}
 
             {tab === 'chat' && (
@@ -4356,6 +4908,16 @@ const { useState, useEffect } = React;
     // ROOT APLIKASI: MENANGANI SESI & ROUTING LOGIN
     // ==========================================
     function AppRoot() {
+      // ==========================================
+      // ROUTE PUBLIK: halaman Psikotes OJT (?psikotes=TOKEN di URL)
+      // ==========================================
+      // Dicek PALING AWAL, sebelum logika sesi admin/toko apa pun -- OJT yang membuka link
+      // ini TIDAK login sama sekali (anonim), jadi harus lolos sebelum layar Login normal.
+      const psikotesToken = new URLSearchParams(window.location.search).get('psikotes');
+      if (psikotesToken) {
+        return <PsikotesOjtPublicPage linkToken={psikotesToken} />;
+      }
+
       const [session, setSession] = useState(() => loadSession());
       const [checking, setChecking] = useState(true);
       // Splash screen animasi masuk: tampil sebentar di awal, lalu otomatis hilang
@@ -4401,7 +4963,7 @@ const { useState, useEffect } = React;
         // Bukan satu-satunya jaring pengaman — kalau ini gagal (mis. jaringan putus),
         // status tetap otomatis jadi Offline lewat mekanisme kedaluwarsa heartbeat.
         if (session && session.role === 'store' && session.storeId) {
-          fetch(`${WORKER_BASE}/api/presence/offline`, {
+          __apiFetch(`${WORKER_BASE}/api/presence/offline`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...__authHeaders() },
             body: JSON.stringify({ storeId: session.storeId, deviceId: getDeviceId() }),
@@ -4427,7 +4989,7 @@ const { useState, useEffect } = React;
         const doInactivityLogout = async () => {
           try {
             if (session.role === 'store' && session.storeId) {
-              await fetch(`${WORKER_BASE}/api/presence/offline`, {
+              await __apiFetch(`${WORKER_BASE}/api/presence/offline`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', ...__authHeaders() },
                 body: JSON.stringify({ storeId: session.storeId, deviceId: getDeviceId() }),
@@ -4734,7 +5296,7 @@ const { useState, useEffect } = React;
         // dan tetap murni HTTP biasa, bukan WebSocket.
         let stoppedByServer = false;
         const sendHeartbeat = () => {
-          fetch(`${WORKER_BASE}/api/presence/ping`, {
+          __apiFetch(`${WORKER_BASE}/api/presence/ping`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...__authHeaders() },
             body: JSON.stringify({ storeId, storeName, deviceId: getDeviceId() }),
@@ -5323,7 +5885,7 @@ useEffect(() => {
         const refreshSummary = async () => {
           if (stopped) return;
           try {
-            const res = await fetch(`${WORKER_BASE}/api/chat/summary`, { headers: __authHeaders() });
+            const res = await __apiFetch(`${WORKER_BASE}/api/chat/summary`, { headers: __authHeaders() });
             const data = await res.json();
             const s = data.summary;
             if (s) {
@@ -9098,7 +9660,7 @@ Daily inventory done✅
 
         (async () => {
           try {
-            const res = await fetch(`${WORKER_BASE}/api/chat?storeId=${encodeURIComponent(storeId)}&limit=200`, { headers: __authHeaders() });
+            const res = await __apiFetch(`${WORKER_BASE}/api/chat?storeId=${encodeURIComponent(storeId)}&limit=200`, { headers: __authHeaders() });
             const data = await res.json();
             if (!stopped && data.messages) setMessages(data.messages);
           } catch (e) { /* riwayat gagal dimuat, tapi long-poll di bawah tetap coba jalan */ }
@@ -9122,7 +9684,7 @@ Daily inventory done✅
       // Tandai terbaca di server (bukan cuma localStorage) begitu panel chat ini dibuka,
       // supaya badge unread akurat lintas device juga.
       useEffect(() => {
-        fetch(`${WORKER_BASE}/api/chat/mark-read`, {
+        __apiFetch(`${WORKER_BASE}/api/chat/mark-read`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...__authHeaders() },
           body: JSON.stringify({ storeId }),
@@ -9140,7 +9702,7 @@ Daily inventory done✅
         setSending(true);
         const optimisticMsg = { sender: senderRole, senderLabel, text: trimmed, timestamp: Date.now() };
         try {
-          const res = await fetch(`${WORKER_BASE}/api/chat`, {
+          const res = await __apiFetch(`${WORKER_BASE}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...__authHeaders() },
             body: JSON.stringify({ storeId, senderLabel, text: trimmed }),
@@ -9163,7 +9725,7 @@ Daily inventory done✅
       const handleEndSession = async () => {
         setEnding(true);
         try {
-          await fetch(`${WORKER_BASE}/api/chat/end-session`, {
+          await __apiFetch(`${WORKER_BASE}/api/chat/end-session`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...__authHeaders() },
             body: JSON.stringify({ storeId }),
