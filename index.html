@@ -316,6 +316,53 @@
 
   <div id="root"></div>
 
+<script>
+  // ==========================================
+  // FIX: konflik lucide.createIcons() vs React DOM reconciliation
+  // ==========================================
+  // lucide.createIcons() mengganti elemen <i data-lucide="..."> LANGSUNG di DOM nyata
+  // (di luar sepengetahuan React) menjadi <svg>. React tetap menyimpan elemen <i> lama
+  // di Fiber tree miliknya. Begitu React nanti perlu menghapus/memindah bagian itu (mis.
+  // tab berpindah, list berubah, komponen unmount), React memanggil
+  // parentNode.removeChild(elemenLamaYangSudahDiganti) -- tapi elemen itu SUDAH TIDAK ADA
+  // di DOM (sudah diganti Lucide), sehingga browser melempar:
+  //   "NotFoundError: Failed to execute 'removeChild' on 'Node': The node to be removed
+  //    is not a child of this node."
+  // Ini SELALU tertangkap oleh AppErrorBoundary sebagai "kendala tampilan" walau
+  // sebenarnya tidak ada bug pada data/logika aplikasi sama sekali -- murni konflik dua
+  // library yang sama-sama memanipulasi DOM.
+  //
+  // Perbaikan MENYELURUH (mengganti seluruh ikon jadi komponen React lucide-react) butuh
+  // menyentuh ribuan baris JSX, terlalu berisiko dilakukan sekaligus. Solusi standar &
+  // aman yang dipakai di sini: buat removeChild/insertBefore "defensif" -- kalau node yang
+  // diminta dihapus/disisipkan TERNYATA bukan child dari parent tsb (karena sudah
+  // diubah pihak lain di luar React), JANGAN lempar error, cukup diam saja (tidak ada apa
+  // pun yang perlu dihapus/dipindah lagi). Ini tidak mengubah tampilan/perilaku apa pun
+  // yang terlihat pengguna -- hanya mencegah crash akibat DOM sudah berubah duluan.
+  (function () {
+    const origRemoveChild = Node.prototype.removeChild;
+    Node.prototype.removeChild = function (child) {
+      if (child.parentNode !== this) {
+        if (console && console.warn) {
+          console.warn('[Tarobun] Diabaikan: removeChild pada node yang sudah tidak jadi child (biasanya akibat lucide.createIcons()).', child);
+        }
+        return child;
+      }
+      return origRemoveChild.call(this, child);
+    };
+
+    const origInsertBefore = Node.prototype.insertBefore;
+    Node.prototype.insertBefore = function (newNode, refNode) {
+      if (refNode && refNode.parentNode !== this) {
+        if (console && console.warn) {
+          console.warn('[Tarobun] Diabaikan: insertBefore dengan referenceNode yang sudah tidak jadi child (biasanya akibat lucide.createIcons()).', refNode);
+        }
+        return this.appendChild(newNode);
+      }
+      return origInsertBefore.call(this, newNode, refNode);
+    };
+  })();
+</script>
 <script type="text/babel">
 const { useState, useEffect } = React;
 
@@ -327,6 +374,23 @@ const { useState, useEffect } = React;
     // KONEKSI KE CLOUDFLARE WORKER (pengganti Firebase)
     // ==========================================
     const WORKER_BASE = 'https://tarobun-api.tepangbkj8.workers.dev';
+
+    // ==========================================
+    // FIX (2026-08): base URL TETAP untuk link publik (psikotes/OJT) yang dibagikan admin
+    // ke luar (WA, dsb).
+    // ------------------------------------------
+    // SEBELUMNYA link dibuat pakai `window.location.origin`, yang artinya kalau admin
+    // membuka app ini dari dalam APK/WebView (origin-nya "capacitor://localhost" atau
+    // "http://localhost", BUKAN alamat web publik), link yang ter-copy ikut jadi
+    // "https://localhost/?psikotes=..." -- link itu jelas tidak bisa dibuka di HP lain.
+    // Sekarang link SELALU dibuat dari alamat web publik yang tetap (PUBLIC_APP_BASE),
+    // apa pun origin tempat admin membuka app-nya (web biasa ataupun APK).
+    // Halaman tujuannya juga sengaja diarahkan ke "psikotes.html" (file KHUSUS, terpisah
+    // dari app admin yang berat ini) supaya OJT yang buka link tidak perlu memuat seluruh
+    // aplikasi admin -- cukup halaman ringan untuk mengerjakan soal saja.
+    // PENTING: PUBLIC_APP_BASE harus persis alamat web tempat file index.html & psikotes.html
+    // ini di-deploy (harus SAMA dengan salah satu domain di ALLOWED_ORIGIN, wrangler.toml).
+    const PUBLIC_APP_BASE = 'https://so-mandiri-tarobun.vercel.app';
 
     // ==========================================
     // SEMUA fetch() ke WORKER_BASE WAJIB lewat __apiFetch (bukan fetch() langsung) supaya
@@ -2161,7 +2225,7 @@ const { useState, useEffect } = React;
       };
 
       const copyLink = (test) => {
-        const link = `${window.location.origin}${window.location.pathname}?psikotes=${test.link_token}`;
+        const link = `${PUBLIC_APP_BASE}/psikotes.html?psikotes=${test.link_token}`;
         // BUGFIX: navigator.clipboard bisa TIDAK ADA / ditolak diam-diam di sebagian WebView APK
         // (Capacitor) kalau permission clipboard belum diberikan atau API-nya tidak didukung --
         // sebelumnya ini bisa melempar error tak tertangani saat tombol "Salin Link" ditekan.
@@ -2359,6 +2423,44 @@ const { useState, useEffect } = React;
       const [regOjtName, setRegOjtName] = useState('');
       const [registering, setRegistering] = useState(false);
       const [copiedLinkId, setCopiedLinkId] = useState(null);
+      const [regError, setRegError] = useState(''); // BUGFIX: lihat catatan di handleRegister
+      const [answerDetailId, setAnswerDetailId] = useState(null); // id attempt yang kunci jawabannya sedang dibuka (admin)
+      const [answerDetail, setAnswerDetail] = useState(null);
+      const [answerDetailLoading, setAnswerDetailLoading] = useState(false);
+
+      // BARU: helper copy-to-clipboard yang aman. navigator.clipboard butuh "secure context"
+      // (https/localhost) DAN kadang tidak tersedia sama sekali di WebView APK lama -- kalau
+      // dipanggil langsung tanpa jaga-jaga, errornya tidak tertangkap dan admin tidak dapat
+      // link-nya sama sekali. Sekarang selalu ada fallback: tampilkan link via prompt supaya
+      // tetap bisa disalin manual.
+      const copyToClipboardSafe = async (text) => {
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+          }
+        } catch (e) { /* lanjut ke fallback di bawah */ }
+        window.prompt('Salin link ini secara manual:', text);
+        return false;
+      };
+
+      // BARU: admin lihat kunci jawaban + jawaban OJT (fitur ini sebelumnya HANYA ada di
+      // sisi Toko -- di sisi Admin belum ada sama sekali, sehingga admin tidak punya cara
+      // membuka kunci jawaban dari tab ini).
+      const openAnswerDetail = async (attemptId) => {
+        if (!attemptId) return;
+        if (answerDetailId === attemptId) { setAnswerDetailId(null); setAnswerDetail(null); return; }
+        setAnswerDetailId(attemptId);
+        setAnswerDetail(null);
+        setAnswerDetailLoading(true);
+        try {
+          const res = await __apiFetch(`${WORKER_BASE}/api/psikotes/attempts/${attemptId}/answers`, { headers: __authHeaders() });
+          const data = await res.json().catch(() => ({}));
+          setAnswerDetail(res.ok ? (data.answers || []) : []);
+        } catch (e) {
+          setAnswerDetail([]);
+        } finally { setAnswerDetailLoading(false); }
+      };
 
       const load = async () => {
         setLoading(true);
@@ -2385,6 +2487,7 @@ const { useState, useEffect } = React;
       const handleRegister = async () => {
         if (!regStoreId || !regOjtName.trim()) return;
         setRegistering(true);
+        setRegError('');
         try {
           const res = await __apiFetch(`${WORKER_BASE}/api/psikotes/tests/${test.id}/ojt-links`, {
             method: 'POST', headers: { 'Content-Type': 'application/json', ...__authHeaders() },
@@ -2395,18 +2498,25 @@ const { useState, useEffect } = React;
             setRegOjtName(''); setRegStoreId(''); setShowRegister(false);
             await loadLinks();
             // Langsung salin link barunya ke clipboard supaya admin tinggal paste ke WA/dsb.
-            const link = `${window.location.origin}${window.location.pathname}?ojt=${data.linkToken}`;
-            navigator.clipboard.writeText(link).then(() => {
+            const link = `${PUBLIC_APP_BASE}/psikotes.html?ojt=${data.linkToken}`;
+            copyToClipboardSafe(link).then(() => {
               setCopiedLinkId(data.id);
               setTimeout(() => setCopiedLinkId(null), 3000);
-            }).catch(() => {});
+            });
+          } else {
+            // BUGFIX: sebelumnya kalau gagal (mis. toko tidak valid), tidak ada pesan apa pun
+            // ke admin -- form cuma diam, kelihatan seperti "tidak bisa disimpan" padahal
+            // sebenarnya server menolak dengan alasan tertentu. Sekarang alasannya ditampilkan.
+            setRegError(data.error || `Gagal membuat link OJT (status ${res.status}).`);
           }
+        } catch (e) {
+          setRegError('Gagal terhubung ke server. Periksa koneksi internet lalu coba lagi.');
         } finally { setRegistering(false); }
       };
 
       const copyLinkFor = (link) => {
-        const url = `${window.location.origin}${window.location.pathname}?ojt=${link.link_token}`;
-        navigator.clipboard.writeText(url).then(() => {
+        const url = `${PUBLIC_APP_BASE}/psikotes.html?ojt=${link.link_token}`;
+        copyToClipboardSafe(url).then(() => {
           setCopiedLinkId(link.id);
           setTimeout(() => setCopiedLinkId(null), 2000);
         });
@@ -2454,6 +2564,7 @@ const { useState, useEffect } = React;
                   <label className="text-xs font-semibold text-slate-600">Nama OJT</label>
                   <input value={regOjtName} onChange={e => setRegOjtName(e.target.value)} placeholder="Nama lengkap OJT" className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm" />
                 </div>
+                {regError && <p className="text-xs text-rose-600 font-semibold">{regError}</p>}
                 <div className="flex gap-2">
                   <button onClick={() => setShowRegister(false)} className="flex-1 border border-slate-200 text-slate-600 text-sm font-semibold py-2 rounded-xl">Batal</button>
                   <button onClick={handleRegister} disabled={registering || !regStoreId || !regOjtName.trim()} className="flex-1 bg-indigo-700 hover:bg-indigo-800 disabled:opacity-50 text-white text-sm font-bold py-2 rounded-xl">{registering ? 'Membuat...' : 'Buat Link'}</button>
@@ -2468,24 +2579,32 @@ const { useState, useEffect } = React;
             ) : (
               <div className="space-y-2">
                 {links.map(l => (
-                  <div key={l.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-semibold text-slate-800 text-sm truncate">{l.ojt_name}</p>
-                      <p className="text-xs text-slate-500 truncate">{l.store_name}</p>
-                      {l.auto_score !== null && l.auto_score !== undefined && <p className="text-xs text-purple-700 font-bold mt-0.5">Skor: {l.auto_score}</p>}
+                  <div key={l.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div className="p-4 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-slate-800 text-sm truncate">{l.ojt_name}</p>
+                        <p className="text-xs text-slate-500 truncate">{l.store_name}</p>
+                        {l.auto_score !== null && l.auto_score !== undefined && <p className="text-xs text-purple-700 font-bold mt-0.5">Skor: {l.auto_score}</p>}
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {l.status === 'unused' ? (
+                          <>
+                            <span className="text-[10px] bg-slate-100 text-slate-600 font-bold px-2 py-1 rounded-md">Belum Dibuka</span>
+                            <button onClick={() => copyLinkFor(l)} className="text-[11px] font-bold bg-slate-100 text-slate-700 px-2.5 py-1.5 rounded-lg">{copiedLinkId === l.id ? 'Tersalin!' : 'Salin Link'}</button>
+                            <button onClick={() => handleDeleteLink(l)} className="text-slate-400 hover:text-rose-600 p-1.5"><i data-lucide="trash-2" className="w-3.5 h-3.5"></i></button>
+                          </>
+                        ) : statusBadge(l.attempt_status)}
+                        {l.attempt_status === 'blocked' && (
+                          <button onClick={() => handleUnblock(l.attempt_id)} className="text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 rounded-lg">Buka Blokir</button>
+                        )}
+                        {l.attempt_id && (l.attempt_status === 'completed' || l.attempt_status === 'blocked') && (
+                          <button onClick={() => openAnswerDetail(l.attempt_id)} className="text-[11px] font-bold bg-purple-100 text-purple-800 px-2.5 py-1.5 rounded-lg">{answerDetailId === l.attempt_id ? 'Tutup' : 'Kunci Jawaban'}</button>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {l.status === 'unused' ? (
-                        <>
-                          <span className="text-[10px] bg-slate-100 text-slate-600 font-bold px-2 py-1 rounded-md">Belum Dibuka</span>
-                          <button onClick={() => copyLinkFor(l)} className="text-[11px] font-bold bg-slate-100 text-slate-700 px-2.5 py-1.5 rounded-lg">{copiedLinkId === l.id ? 'Tersalin!' : 'Salin Link'}</button>
-                          <button onClick={() => handleDeleteLink(l)} className="text-slate-400 hover:text-rose-600 p-1.5"><i data-lucide="trash-2" className="w-3.5 h-3.5"></i></button>
-                        </>
-                      ) : statusBadge(l.attempt_status)}
-                      {l.attempt_status === 'blocked' && (
-                        <button onClick={() => handleUnblock(l.attempt_id)} className="text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 rounded-lg">Buka Blokir</button>
-                      )}
-                    </div>
+                    {answerDetailId === l.attempt_id && (
+                      <AnswerKeyPanel loading={answerDetailLoading} answers={answerDetail} />
+                    )}
                   </div>
                 ))}
               </div>
@@ -2502,23 +2621,67 @@ const { useState, useEffect } = React;
             ) : (
               <div className="space-y-2">
                 {attempts.map(a => (
-                  <div key={a.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center justify-between gap-3">
-                    <div>
-                      <p className="font-semibold text-slate-800 text-sm">{a.ojt_name}</p>
-                      <p className="text-xs text-slate-500">{a.penempatan}</p>
-                      {a.auto_score !== null && a.auto_score !== undefined && <p className="text-xs text-purple-700 font-bold mt-0.5">Skor: {a.auto_score}</p>}
+                  <div key={a.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div className="p-4 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-slate-800 text-sm">{a.ojt_name}</p>
+                        <p className="text-xs text-slate-500">{a.penempatan}</p>
+                        {a.auto_score !== null && a.auto_score !== undefined && <p className="text-xs text-purple-700 font-bold mt-0.5">Skor: {a.auto_score}</p>}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {statusBadge(a.status)}
+                        {a.status === 'blocked' && (
+                          <button onClick={() => handleUnblock(a.id)} className="text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 rounded-lg">Buka Blokir</button>
+                        )}
+                        {(a.status === 'completed' || a.status === 'blocked') && (
+                          <button onClick={() => openAnswerDetail(a.id)} className="text-[11px] font-bold bg-purple-100 text-purple-800 px-2.5 py-1.5 rounded-lg">{answerDetailId === a.id ? 'Tutup' : 'Kunci Jawaban'}</button>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      {statusBadge(a.status)}
-                      {a.status === 'blocked' && (
-                        <button onClick={() => handleUnblock(a.id)} className="text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 rounded-lg">Buka Blokir</button>
-                      )}
-                    </div>
+                    {answerDetailId === a.id && (
+                      <AnswerKeyPanel loading={answerDetailLoading} answers={answerDetail} />
+                    )}
                   </div>
                 ))}
               </div>
             )}
           </div>
+        </div>
+      );
+    }
+
+    // BARU: panel "Kunci Jawaban" -- dipakai admin di PsikotesScoresView untuk melihat setiap
+    // jawaban OJT dibandingkan kunci jawabannya (pilihan ganda) atau isi jawaban esai apa
+    // adanya. Sebelumnya fitur pembanding ini HANYA ada di sisi Toko (StorePsikotesTab).
+    function AnswerKeyPanel({ loading, answers }) {
+      if (loading) {
+        return <div className="border-t border-slate-100 p-4 text-center text-slate-400 text-xs"><i data-lucide="loader" className="w-4 h-4 animate-spin mx-auto"></i></div>;
+      }
+      if (!answers || answers.length === 0) {
+        return <div className="border-t border-slate-100 p-4 text-center text-slate-400 text-xs">Belum ada jawaban tersimpan.</div>;
+      }
+      return (
+        <div className="border-t border-slate-100 p-4 bg-slate-50 space-y-3">
+          {answers.map((ans, i) => (
+            <div key={ans.question_id} className="bg-white rounded-xl border border-slate-200 p-3 space-y-1.5">
+              <p className="text-xs font-semibold text-slate-700">{i + 1}. {ans.question_text}</p>
+              {ans.question_type === 'pilihan_ganda' ? (
+                <div className="space-y-1">
+                  {ans.options.map((opt, oi) => {
+                    const isChosen = String(ans.answer_text) === String(oi);
+                    const isCorrectOpt = ans.correct_index === oi;
+                    return (
+                      <div key={oi} className={`text-[11px] px-2 py-1 rounded-lg ${isChosen && isCorrectOpt ? 'bg-emerald-50 text-emerald-700 font-semibold' : isChosen ? 'bg-rose-50 text-rose-700 font-semibold' : isCorrectOpt ? 'text-emerald-600' : 'text-slate-500'}`}>
+                        {opt} {isChosen && '• dipilih'} {isCorrectOpt && '• kunci jawaban'}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-600 whitespace-pre-wrap bg-slate-50 rounded-lg p-2">{ans.answer_text || <span className="text-slate-400">Tidak dijawab</span>}</p>
+              )}
+            </div>
+          ))}
         </div>
       );
     }
