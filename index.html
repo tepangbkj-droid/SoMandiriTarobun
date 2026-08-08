@@ -2178,6 +2178,7 @@ const { useState, useEffect } = React;
       const [linkCopied, setLinkCopied] = useState(null);
       const [editingTest, setEditingTest] = useState(null); // { id, title } -- buka editor soal
       const [viewingScores, setViewingScores] = useState(null); // { id, title } -- buka daftar hasil
+      const [createError, setCreateError] = useState('');
 
       const loadTests = async () => {
         setLoading(true);
@@ -2198,6 +2199,7 @@ const { useState, useEffect } = React;
       const handleCreate = async () => {
         if (!newTitle.trim()) return;
         setCreating(true);
+        setCreateError('');
         try {
           const res = await __apiFetch(`${WORKER_BASE}/api/psikotes/tests`, {
             method: 'POST', headers: { 'Content-Type': 'application/json', ...__authHeaders() },
@@ -2206,7 +2208,14 @@ const { useState, useEffect } = React;
           if (res.ok) {
             setNewTitle(''); setNewDesc(''); setShowCreate(false);
             await loadTests();
+            return;
           }
+          // BUGFIX: sebelumnya kalau gagal (mis. tabel psikotes_tests belum ada di D1), tidak
+          // ada pesan apa pun -- tombol cuma balik seperti semula tanpa keterangan.
+          const data = await res.json().catch(() => ({}));
+          setCreateError(data.error || `Gagal membuat paket psikotes (status ${res.status}).`);
+        } catch (err) {
+          setCreateError('Gagal terhubung ke server. Periksa koneksi internet lalu coba lagi.');
         } finally { setCreating(false); }
       };
 
@@ -2275,6 +2284,7 @@ const { useState, useEffect } = React;
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
               <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="Judul, mis. SOP Produksi Roti Taro" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm" />
               <textarea value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="Deskripsi singkat (opsional)" rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm" />
+              {createError && <p className="text-xs text-rose-600 font-semibold">{createError}</p>}
               <div className="flex gap-2">
                 <button onClick={() => setShowCreate(false)} className="flex-1 border border-slate-200 text-slate-600 text-sm font-semibold py-2 rounded-xl">Batal</button>
                 <button onClick={handleCreate} disabled={creating || !newTitle.trim()} className="flex-1 bg-purple-800 hover:bg-purple-900 disabled:opacity-50 text-white text-sm font-bold py-2 rounded-xl">{creating ? 'Menyimpan...' : 'Simpan'}</button>
@@ -2332,14 +2342,26 @@ const { useState, useEffect } = React;
     function PsikotesQuestionEditor({ test, onBack }) {
       const [questions, setQuestions] = useState([]);
       const [loading, setLoading] = useState(true);
+      const [loadError, setLoadError] = useState('');
       const [saving, setSaving] = useState(false);
+      const [saveError, setSaveError] = useState('');
 
       useEffect(() => {
         (async () => {
-          const res = await __apiFetch(`${WORKER_BASE}/api/psikotes/tests/${test.id}/questions`, { headers: __authHeaders() });
-          const data = await res.json();
-          if (res.ok) setQuestions(data.questions.length ? data.questions.map(q => ({ type: q.question_type, text: q.question_text, options: q.options.length ? q.options : ['', ''], correctIndex: q.correct_index })) : []);
-          setLoading(false);
+          try {
+            const res = await __apiFetch(`${WORKER_BASE}/api/psikotes/tests/${test.id}/questions`, { headers: __authHeaders() });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok) {
+              setQuestions((data.questions || []).length ? data.questions.map(q => ({ type: q.question_type, text: q.question_text, options: q.options.length ? q.options : ['', ''], correctIndex: q.correct_index })) : []);
+            } else {
+              // BUGFIX: sebelumnya kalau gagal memuat (mis. tabel D1 belum dibuat), halaman ini
+              // crash diam-diam (mencoba baca data.questions.length padahal data.questions
+              // tidak ada) atau cuma menampilkan daftar kosong tanpa keterangan.
+              setLoadError(data.error || `Gagal memuat soal (status ${res.status}).`);
+            }
+          } catch (err) {
+            setLoadError('Gagal terhubung ke server. Periksa koneksi internet lalu coba lagi.');
+          } finally { setLoading(false); }
         })();
       }, [test.id]);
 
@@ -2354,16 +2376,40 @@ const { useState, useEffect } = React;
 
       const handleSave = async () => {
         setSaving(true);
+        setSaveError('');
         try {
           const res = await __apiFetch(`${WORKER_BASE}/api/psikotes/tests/${test.id}/questions`, {
             method: 'PUT', headers: { 'Content-Type': 'application/json', ...__authHeaders() },
             body: JSON.stringify({ questions }),
           });
-          if (res.ok) onBack();
+          if (res.ok) { onBack(); return; }
+          // BUGFIX UTAMA: sebelumnya kalau res.ok false (mis. "no such table: psikotes_questions"
+          // karena tabelnya belum dibuat di D1), TIDAK ADA APA-APA yang terjadi -- tombol
+          // cuma balik jadi "Simpan Semua Soal" lagi tanpa keterangan, persis seperti "soal
+          // tidak bisa disimpan" yang dilaporkan. Sekarang error server ditampilkan jelas.
+          const data = await res.json().catch(() => ({}));
+          setSaveError(data.error || `Gagal menyimpan soal (status ${res.status}). Kalau ini terus terjadi, kemungkinan tabel psikotes di database (D1) belum dibuat -- hubungi admin teknis.`);
+        } catch (err) {
+          setSaveError('Gagal terhubung ke server. Periksa koneksi internet lalu coba lagi.');
         } finally { setSaving(false); }
       };
 
       if (loading) return <div className="text-center text-slate-400 text-sm py-8"><i data-lucide="loader" className="w-6 h-6 animate-spin mx-auto"></i></div>;
+
+      if (loadError) {
+        return (
+          <div className="max-w-2xl mx-auto space-y-4">
+            <div className="flex items-center gap-2">
+              <button onClick={onBack} className="p-2 rounded-lg hover:bg-slate-100"><i data-lucide="arrow-left" className="w-4 h-4"></i></button>
+              <h2 className="font-bold text-slate-700 text-base">Kelola Soal — {test.title}</h2>
+            </div>
+            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-6 text-center space-y-2">
+              <i data-lucide="alert-triangle" className="w-6 h-6 text-rose-500 mx-auto"></i>
+              <p className="text-xs text-rose-700 font-semibold">{loadError}</p>
+            </div>
+          </div>
+        );
+      }
 
       return (
         <div className="max-w-2xl mx-auto space-y-4">
@@ -2402,6 +2448,7 @@ const { useState, useEffect } = React;
             <button onClick={() => addQuestion('esai')} className="flex-1 border border-dashed border-slate-300 text-slate-600 text-xs font-semibold py-2.5 rounded-xl">+ Soal Esai</button>
           </div>
 
+          {saveError && <p className="text-xs text-rose-600 font-semibold text-center">{saveError}</p>}
           <button onClick={handleSave} disabled={saving} className="w-full bg-purple-800 hover:bg-purple-900 disabled:opacity-50 text-white font-bold py-3 rounded-xl text-sm">
             {saving ? 'Menyimpan...' : 'Simpan Semua Soal'}
           </button>
